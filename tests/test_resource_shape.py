@@ -506,16 +506,20 @@ def test_same_resource_yields_the_same_identity_via_both_scan_paths() -> None:
 
 def test_tagging_path_types_keep_the_aws_native_prefix() -> None:
     # Counterpart to test_resource_type_starts_with_the_cli_service_key:
-    # the tagging path passes AWS's own ARN-derived ResourceType through,
-    # so its left half is NOT a --service key. Pinned because
-    # Resource.service is shared by both paths (ADR-0005 Consequences).
+    # the tagging path passes AWS's own ResourceType through untouched,
+    # so an ELB stays under AWS's "elasticloadbalancing" namespace and is
+    # NOT remapped to the "elb" service key the scanners emit. Pinned
+    # because Resource.service is shared by both paths (ADR-0005).
     resources: list[Resource] = []
     process_generic_service_output(
         {
-            "functions": [
+            "listeners": [
                 {
-                    "ResourceARN": "arn:aws:lambda:eu-central-1:1:function:fn",
-                    "ResourceType": "lambda:function",
+                    "ResourceARN": (
+                        "arn:aws:elasticloadbalancing:eu-central-1:1:"
+                        "listener/app/lb/abc/def"
+                    ),
+                    "ResourceType": "elasticloadbalancing:listener",
                 }
             ]
         },
@@ -524,9 +528,9 @@ def test_tagging_path_types_keep_the_aws_native_prefix() -> None:
         IDENTITY,
     )
 
-    (function,) = resources
-    assert function.service == "lambda"
-    assert function.service not in SERVICES
+    (listener,) = resources
+    assert listener.resource_type == "elasticloadbalancing:listener"
+    assert listener.service == "elasticloadbalancing"
 
 
 def test_generic_processor_flattens_resource_groups_records() -> None:

@@ -59,10 +59,12 @@ class Resource:
     def service(self) -> str:
         """The left half of resource_type ("ec2:instance" -> "ec2").
 
-        On the service scan path this is a ``SERVICES`` key, so it
-        round-trips into ``scan --service``. On the tagging path it is
-        the Resource Groups API's own ARN-derived prefix
-        (``lambda:function``) and does not — ADR-0005 Consequences.
+        A ``SERVICES`` key on ``source: "services"``, so it round-trips
+        into ``scan --service``. On ``source: "tagging"`` it is the ARN's
+        own service namespace, which coincides with a ``--service`` key
+        for some services (``ec2``) and not others
+        (``elasticloadbalancing``, ``lambda``) — do not rely on it there.
+        ADR-0005 Consequences.
         """
         return self.resource_type.split(":", 1)[0]
 
