@@ -20,6 +20,7 @@ from aws_resource_inventory.services.autoscaling_service import (
 )
 from aws_resource_inventory.services.ec2_service import process_ec2_output
 from aws_resource_inventory.services.ecs_service import process_ecs_output
+from aws_resource_inventory.services.efs_service import process_efs_output
 from aws_resource_inventory.services.elb_service import process_elb_output
 from aws_resource_inventory.services.rds_service import process_rds_output
 from aws_resource_inventory.services.s3_service import process_s3_output
@@ -108,6 +109,15 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
             }
         ],
     },
+    "efs": {
+        "file_systems": [
+            {
+                "FileSystemId": "fs-1",
+                "Name": "shared-data",
+                "FileSystemArn": "arn:aws:elasticfilesystem:eu-central-1:1:file-system/fs-1",
+            }
+        ],
+    },
     "rds": {
         "db_instances": [
             {
@@ -160,6 +170,7 @@ PROCESSORS: dict[str, Callable[..., None]] = {
     "vpc": process_vpc_output,
     "elb": process_elb_output,
     "ecs": process_ecs_output,
+    "efs": process_efs_output,
     "autoscaling": process_autoscaling_output,
 }
 
@@ -223,6 +234,7 @@ def test_resource_types_are_pinned_per_producer() -> None:
             "ecs:service",
             "ecs:task_definition",
         ],
+        "efs": ["efs:file_system"],
         "autoscaling": [
             "autoscaling:auto_scaling_group",
             "autoscaling:launch_configuration",
@@ -247,6 +259,7 @@ def test_resource_name_is_optional_and_that_is_load_bearing() -> None:
     assert ec2_records["ec2:volume"]["resource_name"] == "vol-1"
 
     assert all("resource_name" not in r for r in flatten("ecs"))
+    assert all("resource_name" in r for r in flatten("efs"))
     assert all("resource_name" in r for r in flatten("s3"))
     assert all("resource_name" in r for r in flatten("vpc"))
     assert all("resource_name" in r for r in flatten("elb"))
