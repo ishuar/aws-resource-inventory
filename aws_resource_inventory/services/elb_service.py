@@ -151,13 +151,21 @@ def process_elb_output(
         if not lb_arn or not lb_id:
             continue
         lb_name = lb.get("LoadBalancerName", "N/A")
-        lb_type = lb.get("Type", "N/A")
+        # The flavour suffix is AWS's own Type attribute ("application" |
+        # "network" | "gateway") — never an enum here, so a new AWS
+        # flavour flows through unchanged. elbv2 always returns Type, so
+        # the absent case only fires if that contract breaks; it degrades
+        # to the coarser base type rather than dropping a load balancer
+        # that has a perfectly good ARN and id.
+        lb_type = lb.get("Type")
 
         flattened_resources.append(
             Resource(
                 region=region,
                 resource_name=lb_name,
-                resource_type=f"elbv2:load_balancer_{lb_type}",
+                resource_type=(
+                    f"elb:loadbalancer-{lb_type}" if lb_type else "elb:loadbalancer"
+                ),
                 resource_id=lb_id,
                 resource_arn=lb_arn,
                 arn_source="observed",
@@ -179,7 +187,7 @@ def process_elb_output(
             Resource(
                 region=region,
                 resource_name=f"{protocol}:{port}",
-                resource_type="elbv2:listener",
+                resource_type="elb:listener",
                 resource_id=listener_id,
                 resource_arn=listener_arn,
                 arn_source="observed",
@@ -198,7 +206,7 @@ def process_elb_output(
             Resource(
                 region=region,
                 resource_name=f"Rule-{priority}",
-                resource_type="elbv2:listener_rule",
+                resource_type="elb:listener-rule",
                 resource_id=rule_id,
                 resource_arn=rule_arn,
                 arn_source="observed",
@@ -217,7 +225,7 @@ def process_elb_output(
             Resource(
                 region=region,
                 resource_name=tg_name,
-                resource_type="elbv2:target_group",
+                resource_type="elb:targetgroup",
                 resource_id=tg_id,
                 resource_arn=tg_arn,
                 arn_source="observed",

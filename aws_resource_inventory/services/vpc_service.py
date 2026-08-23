@@ -72,7 +72,7 @@ def process_vpc_output(
     for vpc in service_data.get("vpcs", []):
         vpc_id = vpc.get("VpcId")
         if not vpc_id:
-            skip_missing_id("vpc")
+            skip_missing_id("vpc:vpc")
             continue
         cidr_block = vpc.get("CidrBlock", "N/A")
 
@@ -80,7 +80,7 @@ def process_vpc_output(
             Resource(
                 region=region,
                 resource_name=f"VPC-{cidr_block}",
-                resource_type="vpc",
+                resource_type="vpc:vpc",
                 resource_id=vpc_id,
                 resource_arn=constructed_arn("vpc", vpc_id),
                 arn_source="constructed",
@@ -113,14 +113,14 @@ def process_vpc_output(
     for nat_gw in service_data.get("nat_gateways", []):
         nat_gw_id = nat_gw.get("NatGatewayId")
         if not nat_gw_id:
-            skip_missing_id("vpc:nat_gateway")
+            skip_missing_id("vpc:natgateway")
             continue
 
         flattened_resources.append(
             Resource(
                 region=region,
                 resource_name=nat_gw_id,
-                resource_type="vpc:nat_gateway",
+                resource_type="vpc:natgateway",
                 resource_id=nat_gw_id,
                 resource_arn=constructed_arn("natgateway", nat_gw_id),
                 arn_source="constructed",
@@ -131,14 +131,14 @@ def process_vpc_output(
     for igw in service_data.get("internet_gateways", []):
         igw_id = igw.get("InternetGatewayId")
         if not igw_id:
-            skip_missing_id("vpc:internet_gateway")
+            skip_missing_id("vpc:internet-gateway")
             continue
 
         flattened_resources.append(
             Resource(
                 region=region,
                 resource_name=igw_id,
-                resource_type="vpc:internet_gateway",
+                resource_type="vpc:internet-gateway",
                 resource_id=igw_id,
                 resource_arn=constructed_arn("internet-gateway", igw_id),
                 arn_source="constructed",
@@ -149,14 +149,14 @@ def process_vpc_output(
     for rt in service_data.get("route_tables", []):
         rt_id = rt.get("RouteTableId")
         if not rt_id:
-            skip_missing_id("vpc:route_table")
+            skip_missing_id("vpc:route-table")
             continue
 
         flattened_resources.append(
             Resource(
                 region=region,
                 resource_name=rt_id,
-                resource_type="vpc:route_table",
+                resource_type="vpc:route-table",
                 resource_id=rt_id,
                 resource_arn=constructed_arn("route-table", rt_id),
                 arn_source="constructed",
@@ -167,14 +167,14 @@ def process_vpc_output(
     for dhcp in service_data.get("dhcp_options", []):
         dhcp_id = dhcp.get("DhcpOptionsId")
         if not dhcp_id:
-            skip_missing_id("vpc:dhcp_options")
+            skip_missing_id("vpc:dhcp-options")
             continue
 
         flattened_resources.append(
             Resource(
                 region=region,
                 resource_name=dhcp_id,
-                resource_type="vpc:dhcp_options",
+                resource_type="vpc:dhcp-options",
                 resource_id=dhcp_id,
                 resource_arn=constructed_arn("dhcp-options", dhcp_id),
                 arn_source="constructed",
@@ -185,14 +185,14 @@ def process_vpc_output(
     for peering in service_data.get("vpc_peering_connections", []):
         peering_id = peering.get("VpcPeeringConnectionId")
         if not peering_id:
-            skip_missing_id("vpc:peering_connection")
+            skip_missing_id("vpc:vpc-peering-connection")
             continue
 
         flattened_resources.append(
             Resource(
                 region=region,
                 resource_name=peering_id,
-                resource_type="vpc:peering_connection",
+                resource_type="vpc:vpc-peering-connection",
                 resource_id=peering_id,
                 resource_arn=constructed_arn("vpc-peering-connection", peering_id),
                 arn_source="constructed",
@@ -203,7 +203,7 @@ def process_vpc_output(
     for endpoint in service_data.get("vpc_endpoints", []):
         endpoint_id = endpoint.get("VpcEndpointId")
         if not endpoint_id:
-            skip_missing_id("vpc:endpoint")
+            skip_missing_id("vpc:vpc-endpoint")
             continue
         service_name = endpoint.get("ServiceName", "N/A")
 
@@ -211,7 +211,7 @@ def process_vpc_output(
             Resource(
                 region=region,
                 resource_name=f"{endpoint_id}-{service_name.split('.')[-1] if service_name != 'N/A' else 'unknown'}",
-                resource_type="vpc:endpoint",
+                resource_type="vpc:vpc-endpoint",
                 resource_id=endpoint_id,
                 resource_arn=constructed_arn("vpc-endpoint", endpoint_id),
                 arn_source="constructed",

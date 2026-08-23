@@ -57,9 +57,14 @@ class Resource:
 
     @property
     def service(self) -> str:
-        """The AWS service prefix of resource_type ("ec2:instance" -> "ec2").
+        """The left half of resource_type ("ec2:instance" -> "ec2").
 
-        Bare legacy types without a colon (e.g. "vpc") are their own service.
+        A ``SERVICES`` key on ``source: "services"``, so it round-trips
+        into ``scan --service``. On ``source: "tagging"`` it is the ARN's
+        own service namespace, which coincides with a ``--service`` key
+        for some services (``ec2``) and not others
+        (``elasticloadbalancing``, ``lambda``) — do not rely on it there.
+        ADR-0005 Consequences.
         """
         return self.resource_type.split(":", 1)[0]
 

@@ -43,14 +43,14 @@ def process_efs_output(
         fs_id = fs.get("FileSystemId")
         fs_arn = fs.get("FileSystemArn")
         if not fs_id or not fs_arn:
-            logger.warning("Skipping efs:file_system in %s: missing id or ARN", region)
+            logger.warning("Skipping efs:file-system in %s: missing id or ARN", region)
             continue
 
         flattened_resources.append(
             Resource(
                 region=region,
                 resource_name=fs.get("Name", fs_id),
-                resource_type="efs:file_system",
+                resource_type="efs:file-system",
                 resource_id=fs_id,
                 resource_arn=fs_arn,
                 arn_source="observed",

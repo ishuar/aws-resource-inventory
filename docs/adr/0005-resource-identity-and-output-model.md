@@ -165,6 +165,17 @@ Field notes:
   a `schema_version` review.
 - Diff tooling must compare `.resources` only, because the `scan` block
   is non-deterministic by design.
+- The right half of `type` is AWS's own spelling, taken from the ARN
+  resource-type segment: `ec2:image` (not `ami`), `vpc:internet-gateway`,
+  `vpc:natgateway`, `elb:targetgroup`, `efs:file-system`,
+  `autoscaling:autoScalingGroup` (AWS's camelCase is kept), `rds:db`.
+  No snake_case normalisation and no house synonyms, so a type can be
+  pasted into AWS docs, the console or another tool unchanged. The one
+  composed value is the load-balancer flavour: AWS's segment plus the
+  `Type` attribute elbv2 returns (`elb:loadbalancer-application` /
+  `-network` / `-gateway`), so a future AWS flavour needs no code
+  change, and a response without `Type` yields the base
+  `elb:loadbalancer`.
 - Type vocabulary is path-dependent. `source: "tagging"` passes through
   the Resource Groups API's own `ResourceType`
   (`elasticloadbalancing:listener`, `lambda:function`), so the left half

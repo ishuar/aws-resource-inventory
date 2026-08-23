@@ -77,7 +77,7 @@ class TestProcessEfsOutput:
             {
                 "region": REGION,
                 "resource_name": "shared-data",
-                "resource_type": "efs:file_system",
+                "resource_type": "efs:file-system",
                 "resource_id": "fs-0123456789abcdef0",
                 "resource_arn": FS_NAMED["FileSystemArn"],
             },
@@ -85,7 +85,7 @@ class TestProcessEfsOutput:
                 # No Name field: fall back to the file system id.
                 "region": REGION,
                 "resource_name": "fs-0fedcba9876543210",
-                "resource_type": "efs:file_system",
+                "resource_type": "efs:file-system",
                 "resource_id": "fs-0fedcba9876543210",
                 "resource_arn": FS_UNNAMED["FileSystemArn"],
             },

@@ -267,10 +267,10 @@ class TestTaggingPathHybridResults:
         assert count == 3
         records = {r["resource_type"]: r for r in json.loads(out.read_text())}
         assert records["s3:bucket"]["resource_id"] == "tagged-bucket"
-        asg = records["autoscaling:auto_scaling_group"]
+        asg = records["autoscaling:autoScalingGroup"]
         assert asg["resource_id"] == "web-asg"
         assert asg["resource_arn"] == "arn:aws:autoscaling:eu-central-1:1:asg/web-asg"
-        lt = records["autoscaling:launch_template"]
+        lt = records["autoscaling:launch-template"]
         assert lt["resource_id"] == "lt-1"
         assert lt["resource_name"] == "web-lt"
 

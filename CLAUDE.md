@@ -101,6 +101,21 @@ reintroduce them.
     ADRs own engineering decisions (*how* to build it).
     `docs/adr/0001-record-decisions-in-adrs.md` is both the first
     instance and the template.
+19. **Mirror AWS's own terminology exactly.** Names in output match
+    what the AWS API returns: if the ARN segment is `internet-gateway`,
+    emit `internet-gateway` — never `internet_gateway`. No snake_case
+    normalisation, no house synonyms (`image`, not `ami`;
+    `loadbalancer`, not `load_balancer`; `autoScalingGroup` keeps AWS's
+    camelCase). Derive the spelling from the ARN resource-type segment
+    or the API response field, never from what reads nicely — users
+    grep and cross-reference against AWS consoles, docs and other
+    tools, and a house vocabulary forces a translation step.
+20. **Breaking a contract to get closer to AWS is allowed — and must be
+    recorded.** Prefer the break over a house workaround; do not
+    propose a migration path for a pre-1.0 output contract. Every
+    deliberate break lands in an ADR (rule 17) stating what broke, why,
+    and what consumers must change.
+
 18. **Stale instructions are worse than no instructions.** This file
     and the ADRs are loaded as context into every AI session; anything
     wrong in them gets confidently repeated. Prune or update them in

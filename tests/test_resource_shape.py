@@ -9,22 +9,15 @@ every record states whether its ARN was observed or constructed. Any
 change to the shape is a deliberate decision, not an accident.
 """
 
-from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 from aws_resource_inventory.lib.outputs import process_generic_service_output
 from aws_resource_inventory.lib.records import CallerIdentity, Resource
-from aws_resource_inventory.services.autoscaling_service import (
-    process_autoscaling_output,
-)
 from aws_resource_inventory.services.ec2_service import process_ec2_output
-from aws_resource_inventory.services.ecs_service import process_ecs_output
-from aws_resource_inventory.services.efs_service import process_efs_output
 from aws_resource_inventory.services.elb_service import process_elb_output
-from aws_resource_inventory.services.rds_service import process_rds_output
-from aws_resource_inventory.services.s3_service import process_s3_output
+from aws_resource_inventory.services.registry import SERVICES, ProcessOutputFunc
 from aws_resource_inventory.services.vpc_service import process_vpc_output
 
 REGION = "eu-central-1"
@@ -166,15 +159,11 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
     },
 }
 
-PROCESSORS: dict[str, Callable[..., None]] = {
-    "ec2": process_ec2_output,
-    "s3": process_s3_output,
-    "rds": process_rds_output,
-    "vpc": process_vpc_output,
-    "elb": process_elb_output,
-    "ecs": process_ecs_output,
-    "efs": process_efs_output,
-    "autoscaling": process_autoscaling_output,
+# Derived from the registry, never hand-listed: a service registered in
+# SERVICES without a fixture here fails loudly instead of quietly
+# escaping the contract every test below parametrizes over.
+PROCESSORS: dict[str, ProcessOutputFunc] = {
+    name: registration.process_output for name, registration in SERVICES.items()
 }
 
 
@@ -223,49 +212,87 @@ def test_resource_types_are_pinned_per_producer() -> None:
     }
     assert by_service == {
         "ec2": [
-            "ec2:ami",
+            "ec2:image",
             "ec2:instance",
-            "ec2:security_group",
+            "ec2:security-group",
             "ec2:snapshot",
             "ec2:volume",
         ],
         "s3": ["s3:bucket"],
-        # Characterization: bare "vpc" (no colon) for VPCs is current behaviour.
         "vpc": [
-            "vpc",
-            "vpc:dhcp_options",
-            "vpc:endpoint",
-            "vpc:internet_gateway",
-            "vpc:nat_gateway",
-            "vpc:peering_connection",
-            "vpc:route_table",
+            "vpc:dhcp-options",
+            "vpc:internet-gateway",
+            "vpc:natgateway",
+            "vpc:route-table",
             "vpc:subnet",
+            "vpc:vpc",
+            "vpc:vpc-endpoint",
+            "vpc:vpc-peering-connection",
         ],
         "elb": [
-            "elbv2:listener",
-            "elbv2:listener_rule",
-            "elbv2:load_balancer_application",
-            "elbv2:target_group",
+            "elb:listener",
+            "elb:listener-rule",
+            "elb:loadbalancer-application",
+            "elb:targetgroup",
         ],
         "ecs": [
-            "ecs:capacity_provider",
+            "ecs:capacity-provider",
             "ecs:cluster",
             "ecs:service",
-            "ecs:task_definition",
+            "ecs:task-definition",
         ],
-        "efs": ["efs:file_system"],
+        "efs": ["efs:file-system"],
         "autoscaling": [
-            "autoscaling:auto_scaling_group",
-            "autoscaling:launch_configuration",
-            "autoscaling:launch_template",
+            "autoscaling:autoScalingGroup",
+            "autoscaling:launch-template",
+            "autoscaling:launchConfiguration",
         ],
         "rds": [
-            "rds:db_cluster",
-            "rds:db_cluster_snapshot",
-            "rds:db_instance",
-            "rds:db_snapshot",
+            "rds:cluster",
+            "rds:cluster-snapshot",
+            "rds:db",
+            "rds:snapshot",
         ],
     }
+
+
+@pytest.mark.parametrize("service", sorted(PROCESSORS))
+def test_resource_type_starts_with_the_cli_service_key(service: str) -> None:
+    # The left half of every resource_type is the producing service's
+    # registry key — so any type in the output round-trips into
+    # `scan --service <left half>`. PROCESSORS is derived from SERVICES,
+    # so every service reaching here is a --service value by construction.
+    for record in flatten(service):
+        assert record["resource_type"].split(":")[0] == service, record
+
+
+def test_load_balancer_flavour_comes_from_aws_type_attribute() -> None:
+    # ALB/NLB/GWLB stay distinct via AWS's own Type attribute — no
+    # hardcoded enum, so new flavours (e.g. "gateway") work unchanged.
+    resources: list[Resource] = []
+    process_elb_output(
+        {
+            "load_balancers": [
+                {
+                    "LoadBalancerName": "my-gwlb",
+                    "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:1:loadbalancer/gwy/my-gwlb/xyz",
+                    "Type": "gateway",
+                },
+                {
+                    # No Type in the response: the flavourless base type,
+                    # never an invented suffix.
+                    "LoadBalancerName": "no-type",
+                    "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:1:loadbalancer/app/no-type/abc",
+                },
+            ]
+        },
+        REGION,
+        resources,
+        IDENTITY,
+    )
+    gwlb, untyped = resources
+    assert gwlb.resource_type == "elb:loadbalancer-gateway"
+    assert untyped.resource_type == "elb:loadbalancer"
 
 
 def test_arn_source_is_pinned_per_producer() -> None:
@@ -279,38 +306,38 @@ def test_arn_source_is_pinned_per_producer() -> None:
         # ec2: the API returns no ARNs for these five types.
         "ec2:instance": "constructed",
         "ec2:volume": "constructed",
-        "ec2:security_group": "constructed",
-        "ec2:ami": "constructed",
+        "ec2:security-group": "constructed",
+        "ec2:image": "constructed",
         "ec2:snapshot": "constructed",
         # s3: ListBuckets returns no ARN; built from the documented format.
         "s3:bucket": "constructed",
         # vpc: only describe_subnets returns an ARN.
-        "vpc": "constructed",
+        "vpc:vpc": "constructed",
         "vpc:subnet": "observed",
-        "vpc:nat_gateway": "constructed",
-        "vpc:internet_gateway": "constructed",
-        "vpc:route_table": "constructed",
-        "vpc:dhcp_options": "constructed",
-        "vpc:peering_connection": "constructed",
-        "vpc:endpoint": "constructed",
+        "vpc:natgateway": "constructed",
+        "vpc:internet-gateway": "constructed",
+        "vpc:route-table": "constructed",
+        "vpc:dhcp-options": "constructed",
+        "vpc:vpc-peering-connection": "constructed",
+        "vpc:vpc-endpoint": "constructed",
         # elb/ecs/efs/rds: every ARN comes straight from the API.
-        "elbv2:load_balancer_application": "observed",
-        "elbv2:listener": "observed",
-        "elbv2:listener_rule": "observed",
-        "elbv2:target_group": "observed",
+        "elb:loadbalancer-application": "observed",
+        "elb:listener": "observed",
+        "elb:listener-rule": "observed",
+        "elb:targetgroup": "observed",
         "ecs:cluster": "observed",
         "ecs:service": "observed",
-        "ecs:task_definition": "observed",
-        "ecs:capacity_provider": "observed",
-        "efs:file_system": "observed",
-        "rds:db_instance": "observed",
-        "rds:db_cluster": "observed",
-        "rds:db_snapshot": "observed",
-        "rds:db_cluster_snapshot": "observed",
+        "ecs:task-definition": "observed",
+        "ecs:capacity-provider": "observed",
+        "efs:file-system": "observed",
+        "rds:db": "observed",
+        "rds:cluster": "observed",
+        "rds:snapshot": "observed",
+        "rds:cluster-snapshot": "observed",
         # autoscaling: launch templates are the one type without an ARN.
-        "autoscaling:auto_scaling_group": "observed",
-        "autoscaling:launch_configuration": "observed",
-        "autoscaling:launch_template": "constructed",
+        "autoscaling:autoScalingGroup": "observed",
+        "autoscaling:launchConfiguration": "observed",
+        "autoscaling:launch-template": "constructed",
     }
 
 
@@ -327,26 +354,26 @@ def test_constructed_arns_follow_the_documented_formats() -> None:
     assert ec2 == {
         "ec2:instance": "arn:aws:ec2:eu-central-1:111122223333:instance/i-1",
         "ec2:volume": "arn:aws:ec2:eu-central-1:111122223333:volume/vol-1",
-        "ec2:security_group": "arn:aws:ec2:eu-central-1:111122223333:security-group/sg-1",
-        "ec2:ami": "arn:aws:ec2:eu-central-1:111122223333:image/ami-1",
+        "ec2:security-group": "arn:aws:ec2:eu-central-1:111122223333:security-group/sg-1",
+        "ec2:image": "arn:aws:ec2:eu-central-1:111122223333:image/ami-1",
         "ec2:snapshot": "arn:aws:ec2:eu-central-1:111122223333:snapshot/snap-1",
     }
 
     vpc = {r["resource_type"]: r["resource_arn"] for r in flatten("vpc")}
     assert vpc == {
-        "vpc": "arn:aws:ec2:eu-central-1:111122223333:vpc/vpc-1",
+        "vpc:vpc": "arn:aws:ec2:eu-central-1:111122223333:vpc/vpc-1",
         "vpc:subnet": "arn:aws:ec2:eu-central-1:111122223333:subnet/subnet-1",
-        "vpc:nat_gateway": "arn:aws:ec2:eu-central-1:111122223333:natgateway/nat-1",
-        "vpc:internet_gateway": "arn:aws:ec2:eu-central-1:111122223333:internet-gateway/igw-1",
-        "vpc:route_table": "arn:aws:ec2:eu-central-1:111122223333:route-table/rtb-1",
-        "vpc:dhcp_options": "arn:aws:ec2:eu-central-1:111122223333:dhcp-options/dopt-1",
-        "vpc:peering_connection": "arn:aws:ec2:eu-central-1:111122223333:vpc-peering-connection/pcx-1",
-        "vpc:endpoint": "arn:aws:ec2:eu-central-1:111122223333:vpc-endpoint/vpce-1",
+        "vpc:natgateway": "arn:aws:ec2:eu-central-1:111122223333:natgateway/nat-1",
+        "vpc:internet-gateway": "arn:aws:ec2:eu-central-1:111122223333:internet-gateway/igw-1",
+        "vpc:route-table": "arn:aws:ec2:eu-central-1:111122223333:route-table/rtb-1",
+        "vpc:dhcp-options": "arn:aws:ec2:eu-central-1:111122223333:dhcp-options/dopt-1",
+        "vpc:vpc-peering-connection": "arn:aws:ec2:eu-central-1:111122223333:vpc-peering-connection/pcx-1",
+        "vpc:vpc-endpoint": "arn:aws:ec2:eu-central-1:111122223333:vpc-endpoint/vpce-1",
     }
 
     asg = {r["resource_type"]: r["resource_arn"] for r in flatten("autoscaling")}
     assert (
-        asg["autoscaling:launch_template"]
+        asg["autoscaling:launch-template"]
         == "arn:aws:ec2:eu-central-1:111122223333:launch-template/lt-1"
     )
 
@@ -384,22 +411,21 @@ def test_identity_fields_per_producer() -> None:
     assert s3_record["resource_id"] == "my-bucket"
     assert s3_record["resource_arn"] == "arn:aws:s3:::my-bucket"
 
-    # elbv2 ids are extracted from the observed ARN and keep the full
+    # ELBv2 ids are extracted from the observed ARN and keep the full
     # path after the resource-type segment — AWS's own id shape.
     elb_records = {r["resource_type"]: r for r in flatten("elb")}
     assert (
-        elb_records["elbv2:load_balancer_application"]["resource_id"]
-        == "app/my-alb/abc"
+        elb_records["elb:loadbalancer-application"]["resource_id"] == "app/my-alb/abc"
     )
-    assert elb_records["elbv2:listener"]["resource_id"] == "app/my-alb/abc/ghi"
-    assert elb_records["elbv2:listener_rule"]["resource_id"] == "app/my-alb/abc/ghi/jkl"
-    assert elb_records["elbv2:target_group"]["resource_id"] == "my-tg/def"
+    assert elb_records["elb:listener"]["resource_id"] == "app/my-alb/abc/ghi"
+    assert elb_records["elb:listener-rule"]["resource_id"] == "app/my-alb/abc/ghi/jkl"
+    assert elb_records["elb:targetgroup"]["resource_id"] == "my-tg/def"
 
     ecs_records = {r["resource_type"]: r for r in flatten("ecs")}
-    assert ecs_records["ecs:task_definition"]["resource_id"] == "api:3"
+    assert ecs_records["ecs:task-definition"]["resource_id"] == "api:3"
 
     asg_records = {r["resource_type"]: r for r in flatten("autoscaling")}
-    assert asg_records["autoscaling:launch_template"]["resource_id"] == "lt-1"
+    assert asg_records["autoscaling:launch-template"]["resource_id"] == "lt-1"
 
 
 def test_resource_missing_its_id_is_skipped_not_emitted_as_na() -> None:
@@ -476,6 +502,35 @@ def test_same_resource_yields_the_same_identity_via_both_scan_paths() -> None:
     assert tagging_side, "tagging path produced no records"
     for resource in tagging_side:
         assert (resource.resource_id, resource.resource_arn) in service_side, resource
+
+
+def test_tagging_path_types_keep_the_aws_native_prefix() -> None:
+    # Counterpart to test_resource_type_starts_with_the_cli_service_key:
+    # the tagging path passes AWS's own ResourceType through untouched,
+    # so an ELB stays under AWS's "elasticloadbalancing" namespace and is
+    # NOT remapped to the "elb" service key the scanners emit. Pinned
+    # because Resource.service is shared by both paths (ADR-0005).
+    resources: list[Resource] = []
+    process_generic_service_output(
+        {
+            "listeners": [
+                {
+                    "ResourceARN": (
+                        "arn:aws:elasticloadbalancing:eu-central-1:1:"
+                        "listener/app/lb/abc/def"
+                    ),
+                    "ResourceType": "elasticloadbalancing:listener",
+                }
+            ]
+        },
+        REGION,
+        resources,
+        IDENTITY,
+    )
+
+    (listener,) = resources
+    assert listener.resource_type == "elasticloadbalancing:listener"
+    assert listener.service == "elasticloadbalancing"
 
 
 def test_generic_processor_flattens_resource_groups_records() -> None:
