@@ -15,9 +15,12 @@ from rich.table import Table
 
 from aws_resource_inventory.services.registry import SERVICES
 
-from .records import Resource
+from .arn import extract_resource_id_from_arn
+from .logging import get_logger
+from .records import CallerIdentity, Resource
 from .resource_groups_utils import SERVICE_SHAPED_SECTIONS
 
+logger = get_logger()
 console = Console()
 # Minimum width for tables to ensure readability
 TABLE_MINIMUM_WIDTH = 86
@@ -141,11 +144,9 @@ def generate_markdown_summary(
                 arn = resource.resource_arn.replace("|", "\\|")
 
                 # Format ID and ARN with code blocks for better readability
-                formatted_id = f"`{resource_id}`" if resource_id != "N/A" else "N/A"
-                formatted_arn = f"`{arn}`" if arn != "N/A" else "N/A"
-
+                # (every record carries a real id and ARN — "N/A" is gone).
                 md_content.append(
-                    f"| {name} | {resource_type} | {formatted_id} | {formatted_arn} |"
+                    f"| {name} | {resource_type} | `{resource_id}` | `{arn}` |"
                 )
 
     # Add scan metadata
@@ -160,31 +161,50 @@ def process_generic_service_output(
     service_data: dict[str, Any],
     region: str,
     flattened_resources: list[Resource],
+    identity: CallerIdentity,
 ) -> None:
     """
     Generic processor for cross-service resources discovered via Resource Groups API.
 
     This handles any AWS service that doesn't have a specific processor, ensuring
-    all discovered resources are included in the unified output format.
+    all discovered resources are included in the unified output format. Every
+    ARN here was returned by the Tagging API, so arn_source is "observed";
+    a record without a usable ARN cannot be identified and is skipped with
+    a log line — never emitted as "N/A".
     """
     for resource_type_key, resources in service_data.items():
-        if isinstance(resources, list):
-            for resource in resources:
-                if isinstance(resource, dict):
-                    # Extract resource details from Resource Groups API format
-                    resource_arn = resource.get("ResourceARN", "")
-                    resource_id = resource.get("ResourceId", "")
-                    resource_type = resource.get("ResourceType", resource_type_key)
+        if not isinstance(resources, list):
+            continue
+        for resource in resources:
+            if not isinstance(resource, dict):
+                continue
+            # Extract resource details from Resource Groups API format
+            resource_arn = resource.get("ResourceARN")
+            resource_type = resource.get("ResourceType", resource_type_key)
+            resource_id = resource.get("ResourceId") or (
+                extract_resource_id_from_arn(resource_arn, resource_type)
+                if resource_arn
+                else None
+            )
+            if not resource_arn or not resource_id:
+                logger.warning(
+                    "Skipping %s in %s: no usable ARN/id in %r",
+                    resource_type,
+                    region,
+                    resource,
+                )
+                continue
 
-                    flattened_resources.append(
-                        Resource(
-                            region=region,
-                            # Already in service:type format from Resource Groups API
-                            resource_type=resource_type,
-                            resource_id=resource_id or "N/A",
-                            resource_arn=resource_arn or "N/A",
-                        )
-                    )
+            flattened_resources.append(
+                Resource(
+                    region=region,
+                    # Already in service:type format from Resource Groups API
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    resource_arn=resource_arn,
+                    arn_source="observed",
+                )
+            )
 
 
 def output_results(
@@ -193,9 +213,13 @@ def output_results(
     output_format: str,
     debug: bool,
     *,
+    identity: CallerIdentity,
     source: Literal["services", "tagging"],
 ) -> int:
     """Process results using modular output processors and format for output.
+
+    ``identity`` is the scanning caller's account + partition (from STS);
+    processors need it to construct the ARNs the AWS APIs do not return.
 
     ``source`` states which scan path produced ``results`` — the caller
     always knows (it chose the path). "tagging" results are Resource
@@ -217,18 +241,18 @@ def output_results(
             if source == "tagging" and service_name not in SERVICE_SHAPED_SECTIONS:
                 # Resource Groups API data all shares one shape.
                 process_generic_service_output(
-                    service_data, region, flattened_resources
+                    service_data, region, flattened_resources, identity
                 )
             else:
                 registration = SERVICES.get(service_name)
                 if registration is not None:
                     registration.process_output(
-                        service_data, region, flattened_resources
+                        service_data, region, flattened_resources, identity
                     )
                 else:
                     # Unknown service: fall back to the generic processor.
                     process_generic_service_output(
-                        service_data, region, flattened_resources
+                        service_data, region, flattened_resources, identity
                     )
 
     # Ensure output directory exists before writing files

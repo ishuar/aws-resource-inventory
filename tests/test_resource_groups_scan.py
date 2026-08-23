@@ -10,6 +10,7 @@ observable results.
 
 from typing import Any
 
+from aws_resource_inventory.lib.records import CallerIdentity
 from aws_resource_inventory.lib.resource_groups_utils import (
     get_all_tagged_resources_across_services,
     scan_all_tagged_resources,
@@ -17,6 +18,8 @@ from aws_resource_inventory.lib.resource_groups_utils import (
 from aws_resource_inventory.lib.scan import scan_all_services_with_tags
 
 REGION = "eu-central-1"
+# moto's fake account, matching the ARNs it stamps on fixtures.
+IDENTITY = CallerIdentity(account="123456789012", partition="aws")
 
 
 def create_tagged_fixtures(aws_session: Any) -> str:
@@ -149,7 +152,12 @@ class TestTagScanFlattensEndToEnd:
         # Consumer: the real report pipeline, no hand-built middle.
         out = tmp_path / "scan.json"
         count = output_results(
-            {REGION: results}, out, "json", debug=False, source="tagging"
+            {REGION: results},
+            out,
+            "json",
+            debug=False,
+            identity=IDENTITY,
+            source="tagging",
         )
 
         records = {r["resource_type"]: r for r in json.loads(out.read_text())}

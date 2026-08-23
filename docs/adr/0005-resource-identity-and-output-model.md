@@ -153,6 +153,11 @@ Field notes:
   waste verb reference resources by this identity.
 - Constructed ARNs are best-effort reconstructions — `arn_source` exists
   precisely so consumers can tell them apart from observed ones.
+- Valid AWS credentials are now required to produce any output. Every
+  constructed ARN needs the caller's account and partition, so the old
+  "show cached results anyway when credential validation fails" path is
+  removed: a failed credential check exits instead of printing a stale
+  cache.
 - Some resources now show `name: null` where a synthesised name used to
   appear; renderers must fall back to the id for display.
 - The record contract test (`tests/test_resource_shape.py`) pins the six

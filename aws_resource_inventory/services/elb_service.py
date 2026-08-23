@@ -14,6 +14,7 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
+from aws_resource_inventory.lib.arn import extract_resource_id_from_arn
 from aws_resource_inventory.lib.clients import get_scan_client
 from aws_resource_inventory.lib.engine import (
     ResourceList,
@@ -24,7 +25,7 @@ from aws_resource_inventory.lib.engine import (
     run_parallel,
 )
 from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
 
 logger = get_logger()
 
@@ -117,14 +118,39 @@ def scan_elb(session: Any, region: str) -> ScanResult:
     return finish("elb", region, result)
 
 
+def _extracted_id(arn: str | None, arn_resource_type: str, region: str) -> str | None:
+    """The id AWS embeds in an ELBv2 ARN, or None (logged) if unusable.
+
+    ELBv2 resources have no separate id field in the API — the ARN is
+    the identity, and the id is its full path after the resource-type
+    segment (e.g. "app/my-alb/<lb-id>/<listener-id>").
+    """
+    resource_id = extract_resource_id_from_arn(arn, arn_resource_type) if arn else None
+    if not resource_id:
+        logger.warning(
+            "Skipping %s in %s: no usable ARN to extract an id from (%r)",
+            arn_resource_type,
+            region,
+            arn,
+        )
+        return None
+    return resource_id
+
+
 def process_elb_output(
-    service_data: dict[str, Any], region: str, flattened_resources: list[Resource]
+    service_data: dict[str, Any],
+    region: str,
+    flattened_resources: list[Resource],
+    identity: CallerIdentity,
 ) -> None:
     """Process ELB scan results for output formatting."""
     # Load Balancers
     for lb in service_data.get("load_balancers", []):
+        lb_arn = lb.get("LoadBalancerArn")
+        lb_id = _extracted_id(lb_arn, "elasticloadbalancing:loadbalancer", region)
+        if not lb_arn or not lb_id:
+            continue
         lb_name = lb.get("LoadBalancerName", "N/A")
-        lb_arn = lb.get("LoadBalancerArn", "N/A")
         lb_type = lb.get("Type", "N/A")
 
         flattened_resources.append(
@@ -132,14 +158,20 @@ def process_elb_output(
                 region=region,
                 resource_name=lb_name,
                 resource_type=f"elbv2:load_balancer_{lb_type}",
-                resource_id="N/A",  # AWS api does not return id
+                resource_id=lb_id,
                 resource_arn=lb_arn,
+                arn_source="observed",
             )
         )
 
     # Listeners
     for listener in service_data.get("listeners", []):
-        listener_arn = listener.get("ListenerArn", "N/A")
+        listener_arn = listener.get("ListenerArn")
+        listener_id = _extracted_id(
+            listener_arn, "elasticloadbalancing:listener", region
+        )
+        if not listener_arn or not listener_id:
+            continue
         protocol = listener.get("Protocol", "N/A")
         port = listener.get("Port", "N/A")
 
@@ -148,14 +180,18 @@ def process_elb_output(
                 region=region,
                 resource_name=f"{protocol}:{port}",
                 resource_type="elbv2:listener",
-                resource_id="N/A",  # AWS api does not return id
+                resource_id=listener_id,
                 resource_arn=listener_arn,
+                arn_source="observed",
             )
         )
 
     # Listener Rules
     for rule in service_data.get("listener_rules", []):
-        rule_arn = rule.get("RuleArn", "N/A")
+        rule_arn = rule.get("RuleArn")
+        rule_id = _extracted_id(rule_arn, "elasticloadbalancing:listener-rule", region)
+        if not rule_arn or not rule_id:
+            continue
         priority = rule.get("Priority", "N/A")
 
         flattened_resources.append(
@@ -163,22 +199,27 @@ def process_elb_output(
                 region=region,
                 resource_name=f"Rule-{priority}",
                 resource_type="elbv2:listener_rule",
-                resource_id="N/A",  # AWS api does not return id
+                resource_id=rule_id,
                 resource_arn=rule_arn,
+                arn_source="observed",
             )
         )
 
     # Target Groups
     for tg in service_data.get("target_groups", []):
+        tg_arn = tg.get("TargetGroupArn")
+        tg_id = _extracted_id(tg_arn, "elasticloadbalancing:targetgroup", region)
+        if not tg_arn or not tg_id:
+            continue
         tg_name = tg.get("TargetGroupName", "N/A")
-        tg_arn = tg.get("TargetGroupArn", "N/A")
 
         flattened_resources.append(
             Resource(
                 region=region,
                 resource_name=tg_name,
                 resource_type="elbv2:target_group",
-                resource_id="N/A",  # AWS api does not return id
+                resource_id=tg_id,
                 resource_arn=tg_arn,
+                arn_source="observed",
             )
         )

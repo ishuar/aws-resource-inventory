@@ -181,11 +181,26 @@ reintroduce them.
 - Shipped: the typed record —
   `aws_resource_inventory/lib/records.py` `Resource`
   (frozen dataclass) is what every processor constructs and every
-  output consumes; `to_record()` owns serialization. `output_results`
-  takes a required `source` ("services" | "tagging"); the tag scan is a
+  output consumes; `to_record()` owns serialization (`arn_source` is
+  carried on the record but not serialized until the JSON envelope
+  ships). `output_results`
+  takes a required `source` ("services" | "tagging") and a required
+  `identity`; the tag scan is a
   hybrid whose service-shaped sections are declared by the producer
   (`SERVICE_SHAPED_SECTIONS` in resource_groups_utils) — never guessed
   from data shape.
+- Shipped: real identity on every record — `resource_id` and
+  `resource_arn` are never "N/A". ARNs the AWS APIs don't return are
+  constructed from `CallerIdentity` (account + partition, read from the
+  caller's own STS ARN by `validate_aws_credentials` — never hardcode
+  the partition) using formats verified against the AWS Service
+  Authorization Reference; every record states `arn_source`
+  ("observed" | "constructed"). ELBv2 ids are extracted from observed
+  ARNs by `aws_resource_inventory/lib/arn.py`, the one home of ARN id
+  extraction for both scan paths. An unidentifiable raw dict is skipped
+  with a log line, never emitted. Valid credentials are therefore
+  required to produce output (the old show-cached-anyway fallback is
+  gone).
 - Test layout: the original six scanners live in
   tests/test_service_scanners.py; every newer service gets its own
   tests/test_<service>_scanner.py. The flattened-record contract for

@@ -376,7 +376,8 @@ aws-resource-inventory/
 │   │
 │   ├── lib/                         # Shared engine and infrastructure
 │   │   ├── engine.py                # Pagination, concurrency, error policy
-│   │   ├── records.py               # Resource — the typed record every output consumes
+│   │   ├── records.py               # Resource + CallerIdentity — the typed record every output consumes
+│   │   ├── arn.py                   # ARN id extraction shared by both scan paths
 │   │   ├── clients.py               # The only boto3 client factory (pooling, adaptive retries)
 │   │   ├── scan.py                  # Region/service scan orchestration + caching hooks
 │   │   ├── outputs.py               # Table / JSON / Markdown output processing

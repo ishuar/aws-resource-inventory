@@ -23,7 +23,7 @@ from aws_resource_inventory.lib.engine import (
     map_parallel,
 )
 from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
 
 logger = get_logger()
 
@@ -149,14 +149,24 @@ def scan_ecs(session: Any, region: str) -> ScanResult:
     return finish("ecs", region, result)
 
 
+def _skip_missing_identity(resource_type: str, region: str) -> None:
+    logger.warning("Skipping %s in %s: missing id or ARN", resource_type, region)
+
+
 def process_ecs_output(
-    service_data: dict[str, Any], region: str, flattened_resources: list[Resource]
+    service_data: dict[str, Any],
+    region: str,
+    flattened_resources: list[Resource],
+    identity: CallerIdentity,
 ) -> None:
     """Process ECS scan results for output formatting."""
     # ECS Clusters
     for cluster in service_data.get("clusters", []):
-        cluster_name = cluster.get("clusterName", "N/A")
-        cluster_arn = cluster.get("clusterArn", "N/A")
+        cluster_name = cluster.get("clusterName")
+        cluster_arn = cluster.get("clusterArn")
+        if not cluster_name or not cluster_arn:
+            _skip_missing_identity("ecs:cluster", region)
+            continue
 
         flattened_resources.append(
             Resource(
@@ -164,13 +174,17 @@ def process_ecs_output(
                 resource_type="ecs:cluster",
                 resource_id=cluster_name,
                 resource_arn=cluster_arn,
+                arn_source="observed",
             )
         )
 
     # ECS Services
     for service in service_data.get("services", []):
-        service_name = service.get("serviceName", "N/A")
-        service_arn = service.get("serviceArn", "N/A")
+        service_name = service.get("serviceName")
+        service_arn = service.get("serviceArn")
+        if not service_name or not service_arn:
+            _skip_missing_identity("ecs:service", region)
+            continue
 
         flattened_resources.append(
             Resource(
@@ -178,13 +192,17 @@ def process_ecs_output(
                 resource_type="ecs:service",
                 resource_id=service_name,
                 resource_arn=service_arn,
+                arn_source="observed",
             )
         )
 
     # ECS Task Definitions
     for task_def in service_data.get("task_definitions", []):
-        task_def_arn = task_def.get("taskDefinitionArn", "N/A")
-        task_def_name = task_def_arn.split("/")[-1] if task_def_arn != "N/A" else "N/A"
+        task_def_arn = task_def.get("taskDefinitionArn")
+        if not task_def_arn:
+            _skip_missing_identity("ecs:task_definition", region)
+            continue
+        task_def_name = task_def_arn.split("/")[-1]
 
         flattened_resources.append(
             Resource(
@@ -192,13 +210,17 @@ def process_ecs_output(
                 resource_type="ecs:task_definition",  # Unified format: service:type
                 resource_id=task_def_name,
                 resource_arn=task_def_arn,
+                arn_source="observed",
             )
         )
 
     # ECS Capacity Providers
     for cp in service_data.get("capacity_providers", []):
-        cp_name = cp.get("name", "N/A")
-        cp_arn = cp.get("capacityProviderArn", "N/A")
+        cp_name = cp.get("name")
+        cp_arn = cp.get("capacityProviderArn")
+        if not cp_name or not cp_arn:
+            _skip_missing_identity("ecs:capacity_provider", region)
+            continue
 
         flattened_resources.append(
             Resource(
@@ -206,5 +228,6 @@ def process_ecs_output(
                 resource_type="ecs:capacity_provider",  # Unified format: service:type
                 resource_id=cp_name,
                 resource_arn=cp_arn,
+                arn_source="observed",
             )
         )

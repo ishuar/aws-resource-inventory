@@ -15,7 +15,10 @@ from typing import Any
 
 from aws_resource_inventory.lib.clients import get_scan_client
 from aws_resource_inventory.lib.engine import Describe, ScanResult, scan_keyed
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.logging import get_logger
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
+
+logger = get_logger()
 
 
 def _instances_from(page: dict[str, Any]) -> list[dict[str, Any]]:
@@ -45,34 +48,49 @@ def scan_ec2(session: Any, region: str) -> ScanResult:
     return scan_keyed(client, EC2_SPECS, service="ec2", region=region, max_workers=4)
 
 
+def _skip_missing_id(resource_type: str, region: str) -> None:
+    logger.warning(
+        "Skipping %s in %s: the API response carries no id field", resource_type, region
+    )
+
+
 def process_ec2_output(
-    service_data: dict[str, Any], region: str, flattened_resources: list[Resource]
+    service_data: dict[str, Any],
+    region: str,
+    flattened_resources: list[Resource],
+    identity: CallerIdentity,
 ) -> None:
-    """Process EC2 scan results for output formatting."""
+    """Process EC2 scan results for output formatting.
+
+    The EC2 API returns no ARNs, so every ARN here is constructed from
+    the caller identity using the documented formats (AWS Service
+    Authorization Reference). Image and snapshot ARNs carry the owner's
+    account, which holds only because the scan asks for self-owned ones
+    (see the comment on the image ARN below).
+    """
     # EC2 Instances
     for instance in service_data.get("instances", []):
-        instance_id = instance.get("InstanceId", "N/A")
-        instance_name = "N/A"
-        # Try to get Name tag
-        for tag in instance.get("Tags", []):
-            if tag["Key"] == "Name":
-                instance_name = tag["Value"]
-                break
-        if instance_name == "N/A":
-            instance_name = instance_id
+        instance_id = instance.get("InstanceId")
+        if not instance_id:
+            _skip_missing_id("ec2:instance", region)
+            continue
 
         flattened_resources.append(
             Resource(
                 region=region,
                 resource_type="ec2:instance",  # Unified format: service:type
                 resource_id=instance_id,
-                resource_arn="N/A",  # Instances don't have ARNs in AWS API
+                resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:instance/{instance_id}",
+                arn_source="constructed",
             )
         )
 
     # EBS Volumes
     for volume in service_data.get("volumes", []):
-        volume_id = volume.get("VolumeId", "N/A")
+        volume_id = volume.get("VolumeId")
+        if not volume_id:
+            _skip_missing_id("ec2:volume", region)
+            continue
         volume_name = "N/A"
         # Try to get Name tag
         for tag in volume.get("Tags", []):
@@ -88,13 +106,17 @@ def process_ec2_output(
                 resource_name=volume_name,
                 resource_type="ec2:volume",
                 resource_id=volume_id,
-                resource_arn="N/A",  # Volumes don't have ARNs in AWS API
+                resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:volume/{volume_id}",
+                arn_source="constructed",
             )
         )
 
     # Security Groups
     for sg in service_data.get("security_groups", []):
-        sg_id = sg.get("GroupId", "N/A")
+        sg_id = sg.get("GroupId")
+        if not sg_id:
+            _skip_missing_id("ec2:security_group", region)
+            continue
         sg_name = sg.get("GroupName", sg_id)
 
         flattened_resources.append(
@@ -103,13 +125,17 @@ def process_ec2_output(
                 resource_name=sg_name,
                 resource_type="ec2:security_group",
                 resource_id=sg_id,
-                resource_arn="N/A",  # Security groups don't have ARNs in AWS API
+                resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:security-group/{sg_id}",
+                arn_source="constructed",
             )
         )
 
     # AMIs
     for ami in service_data.get("amis", []):
-        ami_id = ami.get("ImageId", "N/A")
+        ami_id = ami.get("ImageId")
+        if not ami_id:
+            _skip_missing_id("ec2:ami", region)
+            continue
         ami_name = ami.get("Name", ami_id)
 
         flattened_resources.append(
@@ -118,13 +144,21 @@ def process_ec2_output(
                 resource_name=ami_name,
                 resource_type="ec2:ami",
                 resource_id=ami_id,
-                resource_arn="N/A",  # AMIs don't have ARNs in AWS API
+                # The owner's account, because the scan asks only for
+                # self-owned images (Owners: ["self"]). The empty-account
+                # form in the IAM reference covers images shared from
+                # another account, which this scanner never returns.
+                resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:image/{ami_id}",
+                arn_source="constructed",
             )
         )
 
     # Snapshots
     for snapshot in service_data.get("snapshots", []):
-        snapshot_id = snapshot.get("SnapshotId", "N/A")
+        snapshot_id = snapshot.get("SnapshotId")
+        if not snapshot_id:
+            _skip_missing_id("ec2:snapshot", region)
+            continue
         snapshot_name = snapshot.get("Description", snapshot_id)
 
         flattened_resources.append(
@@ -133,6 +167,9 @@ def process_ec2_output(
                 resource_name=snapshot_name,
                 resource_type="ec2:snapshot",
                 resource_id=snapshot_id,
-                resource_arn="N/A",  # Snapshots don't have ARNs in AWS API
+                # The owner's account, as for images above: the scan asks
+                # only for self-owned snapshots (OwnerIds: ["self"]).
+                resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:snapshot/{snapshot_id}",
+                arn_source="constructed",
             )
         )

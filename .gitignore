@@ -30,8 +30,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchored to the repo root: the stock Python template's bare "lib/"
+# also matched aws_resource_inventory/lib/, silently ignoring new
+# source files there.
+/lib/
+/lib64/
 parts/
 sdist/
 var/

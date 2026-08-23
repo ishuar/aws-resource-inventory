@@ -18,7 +18,10 @@ from aws_resource_inventory.lib.engine import (
     matches_tags,
     run_parallel,
 )
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.logging import get_logger
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
+
+logger = get_logger()
 
 
 def scan_autoscaling(
@@ -91,13 +94,22 @@ def scan_autoscaling(
 
 
 def process_autoscaling_output(
-    service_data: dict[str, Any], region: str, flattened_resources: list[Resource]
+    service_data: dict[str, Any],
+    region: str,
+    flattened_resources: list[Resource],
+    identity: CallerIdentity,
 ) -> None:
     """Process Auto Scaling scan results for output formatting."""
     # Auto Scaling Groups
     for asg in service_data.get("auto_scaling_groups", []):
-        asg_name = asg.get("AutoScalingGroupName", "N/A")
-        asg_arn = asg.get("AutoScalingGroupARN", "N/A")
+        asg_name = asg.get("AutoScalingGroupName")
+        asg_arn = asg.get("AutoScalingGroupARN")
+        if not asg_name or not asg_arn:
+            logger.warning(
+                "Skipping autoscaling:auto_scaling_group in %s: missing name or ARN",
+                region,
+            )
+            continue
 
         flattened_resources.append(
             Resource(
@@ -106,13 +118,20 @@ def process_autoscaling_output(
                 resource_type="autoscaling:auto_scaling_group",
                 resource_id=asg_name,
                 resource_arn=asg_arn,
+                arn_source="observed",
             )
         )
 
     # Launch Configurations
     for lc in service_data.get("launch_configurations", []):
-        lc_name = lc.get("LaunchConfigurationName", "N/A")
-        lc_arn = lc.get("LaunchConfigurationARN", "N/A")
+        lc_name = lc.get("LaunchConfigurationName")
+        lc_arn = lc.get("LaunchConfigurationARN")
+        if not lc_name or not lc_arn:
+            logger.warning(
+                "Skipping autoscaling:launch_configuration in %s: missing name or ARN",
+                region,
+            )
+            continue
 
         flattened_resources.append(
             Resource(
@@ -121,13 +140,19 @@ def process_autoscaling_output(
                 resource_type="autoscaling:launch_configuration",
                 resource_id=lc_name,
                 resource_arn=lc_arn,
+                arn_source="observed",
             )
         )
 
     # Launch Templates
     for lt in service_data.get("launch_templates", []):
+        lt_id = lt.get("LaunchTemplateId")
+        if not lt_id:
+            logger.warning(
+                "Skipping autoscaling:launch_template in %s: missing id", region
+            )
+            continue
         lt_name = lt.get("LaunchTemplateName", "N/A")
-        lt_id = lt.get("LaunchTemplateId", "N/A")
 
         flattened_resources.append(
             Resource(
@@ -135,6 +160,9 @@ def process_autoscaling_output(
                 resource_name=lt_name,
                 resource_type="autoscaling:launch_template",
                 resource_id=lt_id,
-                resource_arn="N/A",  # Launch Templates do not have ARNs
+                # The API returns no launch template ARN; it is an EC2
+                # resource, constructed per the documented format.
+                resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:launch-template/{lt_id}",
+                arn_source="constructed",
             )
         )

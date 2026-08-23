@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
 from aws_resource_inventory.services.autoscaling_service import (
     process_autoscaling_output,
     scan_autoscaling,
@@ -30,8 +30,11 @@ from aws_resource_inventory.services.vpc_service import process_vpc_output, scan
 
 # (session, region[, tag_key, tag_value]) -> {resource_key: [raw boto3 dicts]}
 ScanFunc = Callable[..., dict[str, Any]]
-# (service_data, region, flattened_resources) -> None (appends in place)
-ProcessOutputFunc = Callable[[dict[str, Any], str, list[Resource]], None]
+# (service_data, region, flattened_resources, identity) -> None (appends
+# in place; identity supplies account + partition for constructed ARNs)
+ProcessOutputFunc = Callable[
+    [dict[str, Any], str, list[Resource], CallerIdentity], None
+]
 
 
 @dataclass(frozen=True)
