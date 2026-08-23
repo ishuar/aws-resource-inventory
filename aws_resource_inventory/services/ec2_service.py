@@ -64,8 +64,9 @@ def process_ec2_output(
 
     The EC2 API returns no ARNs, so every ARN here is constructed from
     the caller identity using the documented formats (AWS Service
-    Authorization Reference). Note: image and snapshot ARNs have an
-    EMPTY account field by definition.
+    Authorization Reference). Image and snapshot ARNs carry the owner's
+    account, which holds only because the scan asks for self-owned ones
+    (see the comment on the image ARN below).
     """
     # EC2 Instances
     for instance in service_data.get("instances", []):

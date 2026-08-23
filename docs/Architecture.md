@@ -33,7 +33,7 @@ Two paths, chosen by your flags:
 
 | Module | Job | The one fact to remember |
 |---|---|---|
-| `aws_resource_inventory/cli.py` | Flags, credential check, progress display | `--verbose`/`--log-file` are global: they go before `scan` |
+| `aws_resource_inventory/cli.py` | Flags, credential validation, progress display | `--verbose`/`--log-file` are global: they go before `scan`; valid credentials are required — there is no output without them |
 | `aws_resource_inventory/orchestrator.py` | Fan out regions on threads | Picks per-service vs tag path |
 | `aws_resource_inventory/lib/scan.py` | Fan out services per region; caching | Results cached 10 min per (region, service, tags) |
 | `aws_resource_inventory/services/registry.py` | Service name → scanner + output processor | Adding a service is one entry here |
@@ -41,6 +41,7 @@ Two paths, chosen by your flags:
 | `aws_resource_inventory/lib/engine.py` | Pagination, parallel collection, error guard, tag matching | Result always has exactly the requested keys; AWS errors degrade a key to `[]` with a warning, other errors surface |
 | `aws_resource_inventory/lib/clients.py` | Builds every boto3 client | Connection pool 50, adaptive retries, thread-safe creation |
 | `aws_resource_inventory/lib/records.py` | `Resource` — the typed record | Malformed records fail at construction, not at report time |
+| `aws_resource_inventory/lib/arn.py` | Extracts a resource id out of an observed ARN | The one home for ARN id extraction — both scan paths share it |
 | `aws_resource_inventory/lib/outputs.py` | Records → table / JSON / Markdown | Caller states the scan path via `source=` — never guessed |
 | `aws_resource_inventory/lib/cache.py` | Pickle cache with 10-min TTL | Best-effort: any cache failure is just a miss |
 
@@ -49,7 +50,13 @@ Two paths, chosen by your flags:
 Every scanner returns `{result_key: [raw boto3 dicts]}` (for example
 `{"vpcs": [...], "subnets": [...]}`). Output processors turn those into
 `Resource` records — region, resource_type, resource_id, resource_arn,
-optional resource_name — which all three output formats consume.
+arn_source, optional resource_name — which all three output formats
+consume. `resource_id` and `resource_arn` are always real values, never
+`"N/A"`: where AWS returns no ARN the processor constructs one from the
+`CallerIdentity` it is handed (account + partition), and `arn_source`
+records which kind it is (`"observed"` | `"constructed"`). A raw dict
+with no usable id or ARN is skipped with a warning, never emitted.
+`to_record()` does not serialize `arn_source` yet.
 
 One subtlety: tag-path results are a hybrid. Most sections are Tagging
 API shaped, but the merged Auto Scaling section carries raw service
