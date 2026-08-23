@@ -49,13 +49,15 @@ Two paths, chosen by your flags:
 
 Every scanner returns `{result_key: [raw boto3 dicts]}` (for example
 `{"vpcs": [...], "subnets": [...]}`). Output processors turn those into
-`Resource` records — region, resource_type, resource_id, resource_arn,
-arn_source, optional resource_name — which all three output formats
-consume. `resource_id` and `resource_arn` are always real values, never
-`"N/A"`: where AWS returns no ARN the processor constructs one from the
+`Resource` records — region, resource_name, resource_type, resource_id,
+resource_arn, arn_source — which all three output formats consume.
+`resource_id` and `resource_arn` are always real values, never `"N/A"`:
+where AWS returns no ARN the processor constructs one from the
 `CallerIdentity` it is handed (account + partition), and `arn_source`
 records which kind it is (`"observed"` | `"constructed"`). A raw dict
 with no usable id or ARN is skipped with a warning, never emitted.
+`resource_name` is a name AWS itself supplies (a Name/name attribute or
+the `Name` tag) or null — never synthesized, never a copy of the id.
 `to_record()` does not serialize `arn_source` yet.
 
 One subtlety: tag-path results are a hybrid. Most sections are Tagging

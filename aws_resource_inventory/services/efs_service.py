@@ -49,7 +49,7 @@ def process_efs_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=fs.get("Name", fs_id),
+                resource_name=fs.get("Name"),
                 resource_type="efs:file-system",
                 resource_id=fs_id,
                 resource_arn=fs_arn,

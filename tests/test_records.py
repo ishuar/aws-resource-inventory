@@ -52,11 +52,13 @@ def test_records_are_immutable() -> None:
         resource.resource_id = "other"  # type: ignore[misc]
 
 
-def test_to_record_without_name_matches_the_legacy_dict_exactly() -> None:
-    # Key ORDER matters: JSON output must stay byte-identical with the
-    # dicts producers used to build by hand.
+def test_to_record_without_name_serializes_an_explicit_null() -> None:
+    # resource_name is always present — None (JSON null) when AWS
+    # supplies no name — so every record has the same keys and the data
+    # loads into pandas/Parquet/SQL without ragged rows.
     assert list(make().to_record().items()) == [
         ("region", REGION),
+        ("resource_name", None),
         ("resource_type", "s3:bucket"),
         ("resource_id", "my-bucket"),
         ("resource_arn", "arn:aws:s3:::my-bucket"),
@@ -83,9 +85,9 @@ def test_to_record_with_name_places_it_second_like_the_legacy_dicts() -> None:
     assert record["resource_name"] == "friendly"
 
 
-def test_name_defaults_to_absent() -> None:
-    assert "resource_name" not in make().to_record()
+def test_name_defaults_to_none_and_still_serializes() -> None:
     assert make().resource_name is None
+    assert make().to_record()["resource_name"] is None
 
 
 def test_service_is_derived_from_the_resource_type_prefix() -> None:

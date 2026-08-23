@@ -91,8 +91,9 @@ def process_s3_output(
 
         flattened_resources.append(
             Resource(
+                # The bucket name IS the id — no separate name exists,
+                # so resource_name stays None.
                 region=region,
-                resource_name=bucket_name,
                 resource_type="s3:bucket",
                 resource_id=bucket_name,
                 resource_arn=f"arn:{identity.partition}:s3:::{bucket_name}",

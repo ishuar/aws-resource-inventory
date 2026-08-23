@@ -113,8 +113,9 @@ def process_autoscaling_output(
 
         flattened_resources.append(
             Resource(
+                # An ASG's AWS "name" IS its id — copying it into
+                # resource_name would say nothing, so it stays None.
                 region=region,
-                resource_name=asg_name,
                 resource_type="autoscaling:autoScalingGroup",
                 resource_id=asg_name,
                 resource_arn=asg_arn,
@@ -135,8 +136,9 @@ def process_autoscaling_output(
 
         flattened_resources.append(
             Resource(
+                # A launch configuration's AWS "name" IS its id — it
+                # stays out of resource_name.
                 region=region,
-                resource_name=lc_name,
                 resource_type="autoscaling:launchConfiguration",
                 resource_id=lc_name,
                 resource_arn=lc_arn,
@@ -152,12 +154,12 @@ def process_autoscaling_output(
                 "Skipping autoscaling:launch-template in %s: missing id", region
             )
             continue
-        lt_name = lt.get("LaunchTemplateName", "N/A")
-
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=lt_name,
+                # Unlike groups and launch configurations, a launch
+                # template's name is genuinely distinct from its lt- id.
+                resource_name=lt.get("LaunchTemplateName"),
                 resource_type="autoscaling:launch-template",
                 resource_id=lt_id,
                 # The API returns no launch template ARN; it is an EC2

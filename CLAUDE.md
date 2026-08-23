@@ -221,8 +221,12 @@ reintroduce them.
   tests/test_<service>_scanner.py. The flattened-record contract for
   every producer is pinned centrally in tests/test_resource_shape.py —
   a new processor must be added there.
-- Remaining deepening work, in order: fill in missing resource names
-  (ec2 instances and ecs records show raw ids in reports today); unify
+- Resource names are **real or null**: `resource_name` is a name AWS
+  itself supplies (a Name/name attribute or the `Name` tag) or `None` —
+  never synthesized, never a copy of the id — and the serialized record
+  always carries the key (JSON `null` when absent). Pinned per type in
+  tests/test_resource_shape.py; displays fall back to the id.
+- Remaining deepening work, in order: unify
   the six copies of the scan-path predicate (`all_services or tag_key
   or tag_value`) behind one helper; a progress-event seam so rich
   rendering lives only in aws_resource_inventory/cli.py (plus shrinking

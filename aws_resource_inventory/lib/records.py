@@ -10,10 +10,11 @@ user's terminal.
 ``CallerIdentity`` is the scanning caller's account and partition, read
 once from STS GetCallerIdentity; every constructed ARN is built from it.
 
-``resource_name`` is optional: some producers genuinely have no friendly
-name to offer. Serialization omits it entirely when absent, and keeps
-the historical key order, so JSON output is byte-identical with the
-hand-built dicts this type replaces.
+``resource_name`` is a name AWS itself supplies — a Name/name attribute
+or the ``Name`` tag — or ``None``: names are never synthesized and never
+copies of the id. Serialization always emits the key (JSON ``null`` when
+AWS supplies no name), so every record has the same keys and the data
+loads into tabular tools without ragged rows.
 """
 
 from dataclasses import dataclass
@@ -75,10 +76,10 @@ class Resource:
         envelope chunk emits it. Until then, serialized output changes
         only in resource_id/resource_arn values.
         """
-        record: dict[str, Any] = {"region": self.region}
-        if self.resource_name is not None:
-            record["resource_name"] = self.resource_name
-        record["resource_type"] = self.resource_type
-        record["resource_id"] = self.resource_id
-        record["resource_arn"] = self.resource_arn
-        return record
+        return {
+            "region": self.region,
+            "resource_name": self.resource_name,
+            "resource_type": self.resource_type,
+            "resource_id": self.resource_id,
+            "resource_arn": self.resource_arn,
+        }

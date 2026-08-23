@@ -5,10 +5,14 @@ This is the contract every consumer (table, markdown, JSON, diff) reads:
 exactly these keys, a real id and a real ARN on every record — never
 "N/A". ARNs the AWS API does not return are constructed from the caller
 identity (account + partition) using the documented per-type formats, and
-every record states whether its ARN was observed or constructed. Any
-change to the shape is a deliberate decision, not an accident.
+every record states whether its ARN was observed or constructed.
+resource_name is a name AWS itself supplies (a Name/name attribute or
+the Name tag) or None — never synthesized, never an id copy — and the
+key is always serialized. Any change to the shape is a deliberate
+decision, not an accident.
 """
 
+import re
 from typing import Any
 
 import pytest
@@ -24,7 +28,24 @@ REGION = "eu-central-1"
 IDENTITY = CallerIdentity(account="111122223333", partition="aws")
 GOV_IDENTITY = CallerIdentity(account="111122223333", partition="aws-us-gov")
 
-REQUIRED_KEYS = {"region", "resource_type", "resource_id", "resource_arn"}
+REQUIRED_KEYS = {
+    "region",
+    "resource_name",
+    "resource_type",
+    "resource_id",
+    "resource_arn",
+}
+
+# The synthesized-name patterns this tool used to invent. Deleted
+# deliberately: a resource_name is a name AWS itself supplies (a
+# Name/name attribute or the Name tag) or None — never fabricated.
+BANNED_INVENTED_NAME_PATTERNS = (
+    r"^VPC-",  # VPC-{cidr}
+    r"^Subnet-",  # Subnet-{cidr}
+    r"^vpce-.*-",  # {endpoint id}-{service suffix}
+    r"^[A-Z]+:\d+$",  # ELB listener {protocol}:{port}
+    r"^Rule-",  # ELB rule Rule-{priority}
+)
 
 # Representative boto3-shaped fixtures, one resource per key the scanner emits.
 SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
@@ -388,22 +409,110 @@ def test_partition_flows_into_every_constructed_arn() -> None:
                 assert resource.resource_arn.startswith("arn:aws-us-gov:"), resource
 
 
-def test_resource_name_is_optional_and_that_is_load_bearing() -> None:
-    # Characterization: ec2 instances and every ecs record omit resource_name;
-    # consumers must keep falling back to resource_id. The typed-Resource
-    # refactor must model name as optional (or fill it in for these producers
-    # as a deliberate change).
-    ec2_records = {r["resource_type"]: r for r in flatten("ec2")}
-    assert "resource_name" not in ec2_records["ec2:instance"]
-    assert ec2_records["ec2:volume"]["resource_name"] == "vol-1"
+@pytest.mark.parametrize("service", sorted(PROCESSORS))
+def test_resource_name_key_is_always_present(service: str) -> None:
+    # Deliberate reversal of the old "resource_name is optional" pin:
+    # the key is always serialized, None (JSON null) when AWS supplies
+    # no name — so the data loads into pandas/Parquet/SQL without
+    # ragged rows and consumers never need hasattr-style checks.
+    for record in flatten(service):
+        assert "resource_name" in record, record
 
-    assert all("resource_name" not in r for r in flatten("ecs"))
-    assert all("resource_name" in r for r in flatten("efs"))
-    assert all("resource_name" in r for r in flatten("s3"))
-    assert all("resource_name" in r for r in flatten("vpc"))
-    assert all("resource_name" in r for r in flatten("elb"))
-    assert all("resource_name" in r for r in flatten("autoscaling"))
-    assert all("resource_name" in r for r in flatten("rds"))
+
+@pytest.mark.parametrize("service", sorted(PROCESSORS))
+def test_resource_name_is_real_or_null_never_invented(service: str) -> None:
+    # A name is something AWS itself supplies. It is never a copy of the
+    # id and never one of the synthesized patterns this tool used to
+    # fabricate (VPC-{cidr}, {protocol}:{port}, Rule-{priority}, ...).
+    for record in flatten(service):
+        name = record["resource_name"]
+        if name is None:
+            continue
+        assert name != record["resource_id"], record
+        for pattern in BANNED_INVENTED_NAME_PATTERNS:
+            assert not re.match(pattern, name), (pattern, record)
+
+
+def test_resource_names_are_pinned_per_producer() -> None:
+    # The full name decision table, one row per resource type: a real
+    # AWS-supplied name (Name/name attribute or Name tag) or None.
+    by_type = {
+        r["resource_type"]: r["resource_name"] for s in PROCESSORS for r in flatten(s)
+    }
+    assert by_type == {
+        # ec2: instance/volume use the Name tag; security_group and ami
+        # have genuine name attributes; a snapshot Description is not a
+        # name.
+        "ec2:instance": "web",
+        "ec2:volume": None,
+        "ec2:security-group": "default",
+        "ec2:image": "golden",
+        "ec2:snapshot": None,
+        # s3: the bucket name IS the id — no separate name exists.
+        "s3:bucket": None,
+        # vpc: the API supplies no name attribute for any of these.
+        "vpc:vpc": None,
+        "vpc:subnet": None,
+        "vpc:natgateway": None,
+        "vpc:internet-gateway": None,
+        "vpc:route-table": None,
+        "vpc:dhcp-options": None,
+        "vpc:vpc-peering-connection": None,
+        "vpc:vpc-endpoint": None,
+        # elb: load balancers and target groups carry real AWS names;
+        # listeners and rules have none.
+        "elb:loadbalancer-application": "my-alb",
+        "elb:targetgroup": "my-tg",
+        "elb:listener": None,
+        "elb:listener-rule": None,
+        # ecs: the AWS "name" IS the resource_id by construction.
+        "ecs:cluster": None,
+        "ecs:service": None,
+        "ecs:task-definition": None,
+        "ecs:capacity-provider": None,
+        # efs: Name is a genuine attribute (surfaced from the Name tag).
+        "efs:file-system": "shared-data",
+        # rds: the identifier IS the id — no separate name exists.
+        "rds:db": None,
+        "rds:cluster": None,
+        "rds:snapshot": None,
+        "rds:cluster-snapshot": None,
+        # autoscaling: group/launch-config names ARE their ids; launch
+        # templates have a name genuinely distinct from lt-<id>.
+        "autoscaling:autoScalingGroup": None,
+        "autoscaling:launchConfiguration": None,
+        "autoscaling:launch-template": "web-lt",
+    }
+
+
+def test_ec2_name_tag_or_null_for_instances_and_volumes() -> None:
+    # Carried from PR #51 (which fell back to the instance id) and
+    # deliberately superseded: the Name tag when AWS has one, otherwise
+    # null — the id is never duplicated into the name.
+    resources: list[Resource] = []
+    process_ec2_output(
+        {
+            "instances": [
+                {"InstanceId": "i-tagged", "Tags": [{"Key": "Name", "Value": "web"}]},
+                {"InstanceId": "i-untagged"},
+                {"InstanceId": "i-other-tags", "Tags": [{"Key": "env", "Value": "p"}]},
+            ],
+            "volumes": [
+                {"VolumeId": "vol-tagged", "Tags": [{"Key": "Name", "Value": "data"}]},
+                {"VolumeId": "vol-untagged"},
+            ],
+        },
+        REGION,
+        resources,
+        IDENTITY,
+    )
+    assert [(r.resource_id, r.resource_name) for r in resources] == [
+        ("i-tagged", "web"),
+        ("i-untagged", None),
+        ("i-other-tags", None),
+        ("vol-tagged", "data"),
+        ("vol-untagged", None),
+    ]
 
 
 def test_identity_fields_per_producer() -> None:
@@ -561,12 +670,14 @@ def test_generic_processor_flattens_resource_groups_records() -> None:
     assert [resource.to_record() for resource in resources] == [
         {
             "region": REGION,
+            "resource_name": None,
             "resource_type": "ec2:instance",
             "resource_id": "i-9",
             "resource_arn": "arn:aws:ec2:eu-central-1:1:instance/i-9",
         },
         {
             "region": REGION,
+            "resource_name": None,
             "resource_type": "lambda:function",
             "resource_id": "fn",
             "resource_arn": "arn:aws:lambda:eu-central-1:1:function:fn",

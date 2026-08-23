@@ -54,6 +54,14 @@ def _skip_missing_id(resource_type: str, region: str) -> None:
     )
 
 
+def _name_tag(resource: dict[str, Any]) -> str | None:
+    """The AWS-supplied Name tag, or None — names are never invented."""
+    for tag in resource.get("Tags", []):
+        if tag["Key"] == "Name":
+            return str(tag["Value"])
+    return None
+
+
 def process_ec2_output(
     service_data: dict[str, Any],
     region: str,
@@ -78,6 +86,7 @@ def process_ec2_output(
         flattened_resources.append(
             Resource(
                 region=region,
+                resource_name=_name_tag(instance),
                 resource_type="ec2:instance",  # Unified format: service:type
                 resource_id=instance_id,
                 resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:instance/{instance_id}",
@@ -91,19 +100,10 @@ def process_ec2_output(
         if not volume_id:
             _skip_missing_id("ec2:volume", region)
             continue
-        volume_name = "N/A"
-        # Try to get Name tag
-        for tag in volume.get("Tags", []):
-            if tag["Key"] == "Name":
-                volume_name = tag["Value"]
-                break
-        if volume_name == "N/A":
-            volume_name = volume_id
-
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=volume_name,
+                resource_name=_name_tag(volume),
                 resource_type="ec2:volume",
                 resource_id=volume_id,
                 resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:volume/{volume_id}",
@@ -117,12 +117,10 @@ def process_ec2_output(
         if not sg_id:
             _skip_missing_id("ec2:security-group", region)
             continue
-        sg_name = sg.get("GroupName", sg_id)
-
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=sg_name,
+                resource_name=sg.get("GroupName"),
                 resource_type="ec2:security-group",
                 resource_id=sg_id,
                 resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:security-group/{sg_id}",
@@ -136,12 +134,10 @@ def process_ec2_output(
         if not ami_id:
             _skip_missing_id("ec2:image", region)
             continue
-        ami_name = ami.get("Name", ami_id)
-
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=ami_name,
+                resource_name=ami.get("Name"),
                 resource_type="ec2:image",
                 resource_id=ami_id,
                 # The owner's account, because the scan asks only for
@@ -159,12 +155,11 @@ def process_ec2_output(
         if not snapshot_id:
             _skip_missing_id("ec2:snapshot", region)
             continue
-        snapshot_name = snapshot.get("Description", snapshot_id)
-
         flattened_resources.append(
             Resource(
+                # A snapshot Description is not a name; AWS supplies no
+                # name attribute for snapshots, so resource_name is None.
                 region=region,
-                resource_name=snapshot_name,
                 resource_type="ec2:snapshot",
                 resource_id=snapshot_id,
                 # The owner's account, as for images above: the scan asks

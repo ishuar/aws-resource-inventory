@@ -39,7 +39,8 @@ def scan_rds(session: Any, region: str) -> ScanResult:
 
 
 # Every RDS record follows the same pattern: the identifier field is the
-# id and the name, and the API returns the ARN directly.
+# id (RDS has no separate name, so resource_name stays None) and the API
+# returns the ARN directly.
 _RDS_RECORD_FIELDS: list[tuple[str, str, str, str]] = [
     ("db_instances", "rds:db", "DBInstanceIdentifier", "DBInstanceArn"),
     ("db_clusters", "rds:cluster", "DBClusterIdentifier", "DBClusterArn"),
@@ -73,7 +74,6 @@ def process_rds_output(
             flattened_resources.append(
                 Resource(
                     region=region,
-                    resource_name=resource_id,
                     resource_type=resource_type,
                     resource_id=resource_id,
                     resource_arn=resource_arn,

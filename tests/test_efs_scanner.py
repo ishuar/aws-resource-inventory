@@ -82,9 +82,9 @@ class TestProcessEfsOutput:
                 "resource_arn": FS_NAMED["FileSystemArn"],
             },
             {
-                # No Name field: fall back to the file system id.
+                # No Name field: null, never a copy of the id.
                 "region": REGION,
-                "resource_name": "fs-0fedcba9876543210",
+                "resource_name": None,
                 "resource_type": "efs:file-system",
                 "resource_id": "fs-0fedcba9876543210",
                 "resource_arn": FS_UNNAMED["FileSystemArn"],

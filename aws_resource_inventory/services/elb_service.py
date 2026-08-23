@@ -150,7 +150,6 @@ def process_elb_output(
         lb_id = _extracted_id(lb_arn, "elasticloadbalancing:loadbalancer", region)
         if not lb_arn or not lb_id:
             continue
-        lb_name = lb.get("LoadBalancerName", "N/A")
         # The flavour suffix is AWS's own Type attribute ("application" |
         # "network" | "gateway") — never an enum here, so a new AWS
         # flavour flows through unchanged. elbv2 always returns Type, so
@@ -162,7 +161,7 @@ def process_elb_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=lb_name,
+                resource_name=lb.get("LoadBalancerName"),
                 resource_type=(
                     f"elb:loadbalancer-{lb_type}" if lb_type else "elb:loadbalancer"
                 ),
@@ -180,13 +179,11 @@ def process_elb_output(
         )
         if not listener_arn or not listener_id:
             continue
-        protocol = listener.get("Protocol", "N/A")
-        port = listener.get("Port", "N/A")
-
         flattened_resources.append(
             Resource(
+                # AWS gives listeners no name — protocol:port was our
+                # invention, so resource_name is None.
                 region=region,
-                resource_name=f"{protocol}:{port}",
                 resource_type="elb:listener",
                 resource_id=listener_id,
                 resource_arn=listener_arn,
@@ -200,12 +197,11 @@ def process_elb_output(
         rule_id = _extracted_id(rule_arn, "elasticloadbalancing:listener-rule", region)
         if not rule_arn or not rule_id:
             continue
-        priority = rule.get("Priority", "N/A")
-
         flattened_resources.append(
             Resource(
+                # AWS gives rules no name — Rule-{priority} was our
+                # invention, so resource_name is None.
                 region=region,
-                resource_name=f"Rule-{priority}",
                 resource_type="elb:listener-rule",
                 resource_id=rule_id,
                 resource_arn=rule_arn,
@@ -219,12 +215,10 @@ def process_elb_output(
         tg_id = _extracted_id(tg_arn, "elasticloadbalancing:targetgroup", region)
         if not tg_arn or not tg_id:
             continue
-        tg_name = tg.get("TargetGroupName", "N/A")
-
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=tg_name,
+                resource_name=tg.get("TargetGroupName"),
                 resource_type="elb:targetgroup",
                 resource_id=tg_id,
                 resource_arn=tg_arn,
