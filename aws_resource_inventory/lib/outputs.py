@@ -28,34 +28,41 @@ TABLE_MINIMUM_WIDTH = 86
 
 
 def create_aws_resources_table(
-    flattened_resources: list[Resource], debug: bool
+    flattened_resources: list[Resource], debug: bool, identity: CallerIdentity
 ) -> Table:
     """
     Create a standardized AWS resources table with consistent formatting.
 
+    Display only — the serialized envelope is the record of truth. No ARN
+    column: an ARN is reconstructible from account + region + type + id,
+    and the JSON file still carries it. The scan's account id heads the
+    table so the id columns have their missing ARN segment in view.
+
     Args:
-        flattened_resources: List of resource dictionaries with standardized format
+        flattened_resources: Resources to display
+        debug: Debug mode switches the border colour
+        identity: The scanning caller's account, shown in the table title
 
     Returns:
         Table: Rich Table object ready for display
     """
     table = Table(
-        title="AWS Resources",
+        title=f"AWS Resources — Account {identity.account}",
         border_style="bright_blue" if not debug else "green",
         min_width=TABLE_MINIMUM_WIDTH,
     )
     table.add_column("Region", style="blue")
-    table.add_column("Resource Type", style="yellow")
-    table.add_column("Resource ID", style="green")
-    table.add_column("Resource ARN", style="white")
+    table.add_column("Type", style="yellow")
+    table.add_column("Name", style="cyan")
+    table.add_column("ID", style="green")
 
     for resource in flattened_resources:
         table.add_row(
             resource.region,
-            # Use unified resource_type format (service:type)
             resource.resource_type,
+            # Display-only fallback: the record's resource_name stays null.
+            resource.resource_name or resource.resource_id,
             resource.resource_id,
-            resource.resource_arn,
         )
 
     return table
@@ -294,7 +301,7 @@ def output_results(
         console.print(serialized)
     elif output_format == "table":
         # Create and display the standardized table
-        table = create_aws_resources_table(flattened_resources, debug)
+        table = create_aws_resources_table(flattened_resources, debug, identity)
         console.print(table)
 
         output_file.write_text(serialized)
@@ -312,7 +319,7 @@ def output_results(
 
         # Display the table view in terminal as well
         console.print("\n[bold blue]Resource Table View:[/bold blue]")
-        table = create_aws_resources_table(flattened_resources, debug)
+        table = create_aws_resources_table(flattened_resources, debug, identity)
         console.print(table)
 
         # Also display a summary in console
