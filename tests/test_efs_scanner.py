@@ -9,10 +9,11 @@ flattened Resource vocabulary.
 
 from typing import Any
 
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
 from aws_resource_inventory.services.efs_service import process_efs_output, scan_efs
 
 REGION = "eu-central-1"
+IDENTITY = CallerIdentity(account="123456789012", partition="aws")
 
 FS_NAMED = {
     "FileSystemId": "fs-0123456789abcdef0",
@@ -68,7 +69,9 @@ class TestProcessEfsOutput:
     def test_file_systems_flatten_with_pinned_vocabulary(self) -> None:
         flattened: list[Resource] = []
 
-        process_efs_output({"file_systems": [FS_NAMED, FS_UNNAMED]}, REGION, flattened)
+        process_efs_output(
+            {"file_systems": [FS_NAMED, FS_UNNAMED]}, REGION, flattened, IDENTITY
+        )
 
         assert [r.to_record() for r in flattened] == [
             {
@@ -90,5 +93,5 @@ class TestProcessEfsOutput:
 
     def test_empty_scan_appends_nothing(self) -> None:
         flattened: list[Resource] = []
-        process_efs_output({"file_systems": []}, REGION, flattened)
+        process_efs_output({"file_systems": []}, REGION, flattened, IDENTITY)
         assert flattened == []

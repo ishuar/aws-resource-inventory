@@ -16,7 +16,10 @@ from typing import Any
 
 from aws_resource_inventory.lib.clients import get_scan_client
 from aws_resource_inventory.lib.engine import Describe, ScanResult, scan_keyed
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.logging import get_logger
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
+
+logger = get_logger()
 
 EFS_SPECS: dict[str, Describe] = {
     "file_systems": Describe("describe_file_systems", "FileSystems"),
@@ -33,10 +36,15 @@ def process_efs_output(
     service_data: dict[str, Any],
     region: str,
     flattened_resources: list[Resource],
+    identity: CallerIdentity,
 ) -> None:
     """Process EFS scan results for output formatting."""
     for fs in service_data.get("file_systems", []):
-        fs_id = fs.get("FileSystemId", "N/A")
+        fs_id = fs.get("FileSystemId")
+        fs_arn = fs.get("FileSystemArn")
+        if not fs_id or not fs_arn:
+            logger.warning("Skipping efs:file_system in %s: missing id or ARN", region)
+            continue
 
         flattened_resources.append(
             Resource(
@@ -44,6 +52,7 @@ def process_efs_output(
                 resource_name=fs.get("Name", fs_id),
                 resource_type="efs:file_system",
                 resource_id=fs_id,
-                resource_arn=fs.get("FileSystemArn", "N/A"),
+                resource_arn=fs_arn,
+                arn_source="observed",
             )
         )

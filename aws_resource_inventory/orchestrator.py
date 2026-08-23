@@ -29,6 +29,7 @@ from rich.table import Table
 # Import logging (using simplified logging)
 from aws_resource_inventory.lib.logging import get_logger
 from aws_resource_inventory.lib.outputs import TABLE_MINIMUM_WIDTH
+from aws_resource_inventory.lib.records import CallerIdentity
 from aws_resource_inventory.lib.resource_groups_utils import (
     should_use_resource_groups_api,
 )
@@ -83,12 +84,14 @@ def get_session(profile_name: str | None = None) -> boto3.Session:
 
 def validate_aws_credentials(
     session: boto3.Session, profile_name: str | None = None
-) -> tuple[bool, str]:
+) -> tuple[bool, str, CallerIdentity | None]:
     """
     Validate AWS credentials by attempting to call STS get-caller-identity.
 
     Returns:
-        tuple: (is_valid, message)
+        tuple: (is_valid, message, caller_identity). The identity carries
+        the account and partition every constructed ARN is built from;
+        it is None exactly when validation failed.
     """
     try:
         logger.debug("Validating AWS credentials using STS GetCallerIdentity")
@@ -100,18 +103,24 @@ def validate_aws_credentials(
         )
         response = sts_client.get_caller_identity()
 
-        # Extract account info
-        account_id = response.get("Account", "Unknown")
-        user_arn = response.get("Arn", "Unknown")
-        user_name = user_arn.split("/")[-1] if user_arn != "Unknown" else "Unknown"
+        # STS always returns Account and Arn on success; a surprise here
+        # is converted to a failure by the boundary except below.
+        account_id = response["Account"]
+        user_arn = response["Arn"]
+        user_name = user_arn.split("/")[-1]
+        identity = CallerIdentity.from_caller_arn(account_id, user_arn)
 
         logger.debug(
-            "Credentials validated - Account: %s, User: %s", account_id, user_name
+            "Credentials validated - Account: %s, Partition: %s, User: %s",
+            account_id,
+            identity.partition,
+            user_name,
         )
 
         return (
             True,
             f"✅ AWS credentials valid (Account: {account_id}, User: {user_name})",
+            identity,
         )
 
     except NoCredentialsError:
@@ -119,23 +128,25 @@ def validate_aws_credentials(
         return (
             False,
             f"❌ No AWS credentials found{profile_msg}. Please configure AWS credentials or set AWS_PROFILE environment variable.",
+            None,
         )
 
     except TokenRetrievalError:
         return (
             False,
             "❌ Failed to retrieve AWS credentials. Check your AWS CLI configuration or SSO session.",
+            None,
         )
 
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code", "Unknown")
         if error_code in ["InvalidUserID.NotFound", "AccessDenied"]:
-            return False, f"❌ AWS credentials invalid or expired: {e}"
-        return False, f"❌ AWS API error: {e}"
+            return False, f"❌ AWS credentials invalid or expired: {e}", None
+        return False, f"❌ AWS API error: {e}", None
 
     # User-facing boundary: any failure becomes a message, never a crash.
     except Exception as e:  # noqa: BLE001
-        return False, f"❌ Unexpected error validating credentials: {e}"
+        return False, f"❌ Unexpected error validating credentials: {e}", None
 
 
 def display_banner(debug: bool) -> str:

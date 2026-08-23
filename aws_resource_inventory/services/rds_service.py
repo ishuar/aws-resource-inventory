@@ -17,7 +17,10 @@ from typing import Any
 
 from aws_resource_inventory.lib.clients import get_scan_client
 from aws_resource_inventory.lib.engine import Describe, ScanResult, scan_keyed
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.logging import get_logger
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
+
+logger = get_logger()
 
 RDS_SPECS: dict[str, Describe] = {
     "db_instances": Describe("describe_db_instances", "DBInstances"),
@@ -35,64 +38,45 @@ def scan_rds(session: Any, region: str) -> ScanResult:
     return scan_keyed(client, RDS_SPECS, service="rds", region=region, max_workers=4)
 
 
+# Every RDS record follows the same pattern: the identifier field is the
+# id and the name, and the API returns the ARN directly.
+_RDS_RECORD_FIELDS: list[tuple[str, str, str, str]] = [
+    ("db_instances", "rds:db_instance", "DBInstanceIdentifier", "DBInstanceArn"),
+    ("db_clusters", "rds:db_cluster", "DBClusterIdentifier", "DBClusterArn"),
+    (
+        "db_cluster_snapshots",
+        "rds:db_cluster_snapshot",
+        "DBClusterSnapshotIdentifier",
+        "DBClusterSnapshotArn",
+    ),
+    ("db_snapshots", "rds:db_snapshot", "DBSnapshotIdentifier", "DBSnapshotArn"),
+]
+
+
 def process_rds_output(
     service_data: dict[str, Any],
     region: str,
     flattened_resources: list[Resource],
+    identity: CallerIdentity,
 ) -> None:
     """Process RDS scan results for output formatting."""
-    # DB Instances
-    for instance in service_data.get("db_instances", []):
-        instance_id = instance.get("DBInstanceIdentifier", "N/A")
+    for result_key, resource_type, id_field, arn_field in _RDS_RECORD_FIELDS:
+        for raw in service_data.get(result_key, []):
+            resource_id = raw.get(id_field)
+            resource_arn = raw.get(arn_field)
+            if not resource_id or not resource_arn:
+                logger.warning(
+                    "Skipping %s in %s: missing id or ARN", resource_type, region
+                )
+                continue
 
-        flattened_resources.append(
-            Resource(
-                region=region,
-                resource_name=instance_id,
-                resource_type="rds:db_instance",
-                resource_id=instance_id,
-                resource_arn=instance.get("DBInstanceArn", "N/A"),
+            flattened_resources.append(
+                Resource(
+                    region=region,
+                    resource_name=resource_id,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    resource_arn=resource_arn,
+                    arn_source="observed",
+                )
             )
-        )
-
-    # DB Clusters
-    for cluster in service_data.get("db_clusters", []):
-        cluster_id = cluster.get("DBClusterIdentifier", "N/A")
-
-        flattened_resources.append(
-            Resource(
-                region=region,
-                resource_name=cluster_id,
-                resource_type="rds:db_cluster",
-                resource_id=cluster_id,
-                resource_arn=cluster.get("DBClusterArn", "N/A"),
-            )
-        )
-
-    # DB Cluster Snapshots (Aurora)
-    for snapshot in service_data.get("db_cluster_snapshots", []):
-        snapshot_id = snapshot.get("DBClusterSnapshotIdentifier", "N/A")
-
-        flattened_resources.append(
-            Resource(
-                region=region,
-                resource_name=snapshot_id,
-                resource_type="rds:db_cluster_snapshot",
-                resource_id=snapshot_id,
-                resource_arn=snapshot.get("DBClusterSnapshotArn", "N/A"),
-            )
-        )
-
-    # DB Snapshots
-    for snapshot in service_data.get("db_snapshots", []):
-        snapshot_id = snapshot.get("DBSnapshotIdentifier", "N/A")
-
-        flattened_resources.append(
-            Resource(
-                region=region,
-                resource_name=snapshot_id,
-                resource_type="rds:db_snapshot",
-                resource_id=snapshot_id,
-                resource_arn=snapshot.get("DBSnapshotArn", "N/A"),
-            )
-        )

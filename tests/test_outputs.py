@@ -12,9 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from aws_resource_inventory.lib.outputs import generate_markdown_summary, output_results
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
 
 REGION = "eu-central-1"
+IDENTITY = CallerIdentity(account="111122223333", partition="aws")
 
 
 def traditional_results() -> dict[str, Any]:
@@ -52,7 +53,12 @@ class TestOutputResults:
     ) -> None:
         out = tmp_path / "scan.json"
         count = output_results(
-            traditional_results(), out, "json", debug=False, source="services"
+            traditional_results(),
+            out,
+            "json",
+            debug=False,
+            identity=IDENTITY,
+            source="services",
         )
 
         assert count == 3
@@ -63,7 +69,12 @@ class TestOutputResults:
     def test_table_format_still_writes_the_json_file(self, tmp_path: Path) -> None:
         out = tmp_path / "scan.json"
         count = output_results(
-            traditional_results(), out, "table", debug=False, source="services"
+            traditional_results(),
+            out,
+            "table",
+            debug=False,
+            identity=IDENTITY,
+            source="services",
         )
 
         assert count == 3
@@ -74,7 +85,12 @@ class TestOutputResults:
     ) -> None:
         out = tmp_path / "scan.json"
         count = output_results(
-            traditional_results(), out, "md", debug=False, source="services"
+            traditional_results(),
+            out,
+            "md",
+            debug=False,
+            identity=IDENTITY,
+            source="services",
         )
 
         assert count == 3
@@ -85,7 +101,12 @@ class TestOutputResults:
     def test_markdown_alias_behaves_like_md(self, tmp_path: Path) -> None:
         out = tmp_path / "scan.json"
         output_results(
-            traditional_results(), out, "markdown", debug=False, source="services"
+            traditional_results(),
+            out,
+            "markdown",
+            debug=False,
+            identity=IDENTITY,
+            source="services",
         )
         assert (tmp_path / "scan.md").exists()
 
@@ -97,7 +118,12 @@ class TestOutputResults:
         # change may make this a hard error; that would be an improvement.)
         out = tmp_path / "scan.json"
         count = output_results(
-            traditional_results(), out, "yaml", debug=False, source="services"
+            traditional_results(),
+            out,
+            "yaml",
+            debug=False,
+            identity=IDENTITY,
+            source="services",
         )
 
         assert count == 3
@@ -106,13 +132,20 @@ class TestOutputResults:
     def test_missing_output_directory_is_created(self, tmp_path: Path) -> None:
         out = tmp_path / "deeply" / "nested" / "scan.json"
         output_results(
-            traditional_results(), out, "json", debug=False, source="services"
+            traditional_results(),
+            out,
+            "json",
+            debug=False,
+            identity=IDENTITY,
+            source="services",
         )
         assert out.exists()
 
     def test_empty_results_produce_an_empty_file_and_zero(self, tmp_path: Path) -> None:
         out = tmp_path / "scan.json"
-        count = output_results({}, out, "json", debug=False, source="services")
+        count = output_results(
+            {}, out, "json", debug=False, identity=IDENTITY, source="services"
+        )
 
         assert count == 0
         assert json.loads(out.read_text()) == []
@@ -120,7 +153,12 @@ class TestOutputResults:
     def test_empty_service_data_is_skipped(self, tmp_path: Path) -> None:
         out = tmp_path / "scan.json"
         count = output_results(
-            {REGION: {"ec2": {}}}, out, "json", debug=False, source="services"
+            {REGION: {"ec2": {}}},
+            out,
+            "json",
+            debug=False,
+            identity=IDENTITY,
+            source="services",
         )
         assert count == 0
 
@@ -131,7 +169,12 @@ class TestOutputResults:
         # processor) go through the generic processor, keyed by ResourceType.
         out = tmp_path / "scan.json"
         count = output_results(
-            resource_groups_results(), out, "json", debug=False, source="tagging"
+            resource_groups_results(),
+            out,
+            "json",
+            debug=False,
+            identity=IDENTITY,
+            source="tagging",
         )
 
         assert count == 1
@@ -160,7 +203,9 @@ class TestOutputResults:
             }
         }
         out = tmp_path / "scan.json"
-        count = output_results(results, out, "json", debug=False, source="tagging")
+        count = output_results(
+            results, out, "json", debug=False, identity=IDENTITY, source="tagging"
+        )
 
         assert count == 1
         record = json.loads(out.read_text())[0]
@@ -171,13 +216,14 @@ class TestOutputResults:
     ) -> None:
         results = {REGION: {"unknownsvc": {"things": [{"SomeKey": "some-value"}]}}}
         out = tmp_path / "scan.json"
-        count = output_results(results, out, "json", debug=False, source="services")
+        count = output_results(
+            results, out, "json", debug=False, identity=IDENTITY, source="services"
+        )
 
-        assert count == 1
-        record = json.loads(out.read_text())[0]
-        # Nothing extractable: identity fields degrade to N/A, not a crash.
-        assert record["resource_id"] == "N/A"
-        assert record["resource_arn"] == "N/A"
+        # Nothing identifiable (no ARN, no id): the record is skipped with
+        # a log line — "N/A" identities are banned output.
+        assert count == 0
+        assert json.loads(out.read_text()) == []
 
 
 class TestTaggingPathHybridResults:
@@ -214,7 +260,9 @@ class TestTaggingPathHybridResults:
             }
         }
         out = tmp_path / "scan.json"
-        count = output_results(results, out, "json", debug=False, source="tagging")
+        count = output_results(
+            results, out, "json", debug=False, identity=IDENTITY, source="tagging"
+        )
 
         assert count == 3
         records = {r["resource_type"]: r for r in json.loads(out.read_text())}
@@ -236,12 +284,14 @@ class TestMarkdownSummary:
                 resource_type="s3:bucket",
                 resource_id="bucket-a",
                 resource_arn="arn:aws:s3:::bucket-a",
+                arn_source="constructed",
             ),
             Resource(
                 region="us-east-1",
                 resource_type="ec2:instance",
                 resource_id="i-1",
-                resource_arn="N/A",
+                resource_arn="arn:aws:ec2:us-east-1:111122223333:instance/i-1",
+                arn_source="constructed",
             ),
         ]
         report = generate_markdown_summary(flattened, {})
@@ -260,6 +310,7 @@ class TestMarkdownSummary:
                 resource_type="ecs:cluster",
                 resource_id="prod-cluster",
                 resource_arn="arn:aws:ecs:eu-central-1:1:cluster/prod-cluster",
+                arn_source="observed",
             )
         ]
         report = generate_markdown_summary(flattened, {})
@@ -273,6 +324,7 @@ class TestMarkdownSummary:
                 resource_type="s3:bucket",
                 resource_id="name|with|pipes",
                 resource_arn="arn:aws:s3:::name|with|pipes",
+                arn_source="constructed",
             )
         ]
         report = generate_markdown_summary(flattened, {})

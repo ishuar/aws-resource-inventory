@@ -22,7 +22,7 @@ from aws_resource_inventory.lib.engine import (
     run_parallel,
 )
 from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
 
 logger = get_logger()
 
@@ -71,11 +71,23 @@ def scan_s3(session: Any, region: str) -> ScanResult:
 
 
 def process_s3_output(
-    service_data: dict[str, Any], region: str, flattened_resources: list[Resource]
+    service_data: dict[str, Any],
+    region: str,
+    flattened_resources: list[Resource],
+    identity: CallerIdentity,
 ) -> None:
-    """Process S3 scan results for output formatting."""
+    """Process S3 scan results for output formatting.
+
+    ListBuckets returns no ARN; the bucket ARN is constructed from the
+    documented partition-only format (arn:<partition>:s3:::<name>).
+    """
     for bucket in service_data.get("buckets", []):
-        bucket_name = bucket.get("Name", "N/A")
+        bucket_name = bucket.get("Name")
+        if not bucket_name:
+            logger.warning(
+                "Skipping s3:bucket in %s: the API response carries no name", region
+            )
+            continue
 
         flattened_resources.append(
             Resource(
@@ -83,6 +95,7 @@ def process_s3_output(
                 resource_name=bucket_name,
                 resource_type="s3:bucket",
                 resource_id=bucket_name,
-                resource_arn=f"arn:aws:s3:::{bucket_name}",
+                resource_arn=f"arn:{identity.partition}:s3:::{bucket_name}",
+                arn_source="constructed",
             )
         )

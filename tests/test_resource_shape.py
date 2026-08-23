@@ -1,11 +1,12 @@
 """
 Resource shape seam: the flattened record every process_*_output emits.
 
-This is the contract the planned typed-Resource refactor must preserve:
-consumers (table, markdown, JSON, diff) read exactly these keys. The tests
-pin the shape per producer, including today's quirks (which producers omit
-resource_name, which hardcode "N/A"), so any change to the shape is a
-deliberate decision, not an accident.
+This is the contract every consumer (table, markdown, JSON, diff) reads:
+exactly these keys, a real id and a real ARN on every record — never
+"N/A". ARNs the AWS API does not return are constructed from the caller
+identity (account + partition) using the documented per-type formats, and
+every record states whether its ARN was observed or constructed. Any
+change to the shape is a deliberate decision, not an accident.
 """
 
 from collections.abc import Callable
@@ -14,7 +15,7 @@ from typing import Any
 import pytest
 
 from aws_resource_inventory.lib.outputs import process_generic_service_output
-from aws_resource_inventory.lib.records import Resource
+from aws_resource_inventory.lib.records import CallerIdentity, Resource
 from aws_resource_inventory.services.autoscaling_service import (
     process_autoscaling_output,
 )
@@ -27,6 +28,8 @@ from aws_resource_inventory.services.s3_service import process_s3_output
 from aws_resource_inventory.services.vpc_service import process_vpc_output
 
 REGION = "eu-central-1"
+IDENTITY = CallerIdentity(account="111122223333", partition="aws")
+GOV_IDENTITY = CallerIdentity(account="111122223333", partition="aws-us-gov")
 
 REQUIRED_KEYS = {"region", "resource_type", "resource_id", "resource_arn"}
 
@@ -46,7 +49,7 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
             {
                 "SubnetId": "subnet-1",
                 "CidrBlock": "10.0.1.0/24",
-                "SubnetArn": "arn:aws:ec2:eu-central-1:1:subnet/subnet-1",
+                "SubnetArn": "arn:aws:ec2:eu-central-1:111122223333:subnet/subnet-1",
             }
         ],
         "nat_gateways": [{"NatGatewayId": "nat-1"}],
@@ -175,10 +178,16 @@ PROCESSORS: dict[str, Callable[..., None]] = {
 }
 
 
-def flatten(service: str) -> list[dict[str, Any]]:
+def flatten_resources(
+    service: str, identity: CallerIdentity = IDENTITY
+) -> list[Resource]:
     resources: list[Resource] = []
-    PROCESSORS[service](SERVICE_FIXTURES[service], REGION, resources)
-    return [resource.to_record() for resource in resources]
+    PROCESSORS[service](SERVICE_FIXTURES[service], REGION, resources, identity)
+    return resources
+
+
+def flatten(service: str) -> list[dict[str, Any]]:
+    return [resource.to_record() for resource in flatten_resources(service)]
 
 
 @pytest.mark.parametrize("service", sorted(PROCESSORS))
@@ -194,6 +203,16 @@ def test_every_record_carries_the_required_keys(service: str) -> None:
 def test_one_record_per_fixture_resource(service: str) -> None:
     expected = sum(len(v) for v in SERVICE_FIXTURES[service].values())
     assert len(flatten(service)) == expected
+
+
+@pytest.mark.parametrize("service", sorted(PROCESSORS))
+def test_no_identity_field_is_ever_na(service: str) -> None:
+    # The core guarantee of the identity work: every record has a real
+    # id and a real ARN. "N/A" is banned output.
+    for record in flatten(service):
+        assert record["resource_id"] not in ("", "N/A"), record
+        assert record["resource_arn"] not in ("", "N/A"), record
+        assert record["resource_arn"].startswith("arn:"), record
 
 
 def test_resource_types_are_pinned_per_producer() -> None:
@@ -249,6 +268,95 @@ def test_resource_types_are_pinned_per_producer() -> None:
     }
 
 
+def test_arn_source_is_pinned_per_producer() -> None:
+    # Which ARNs come from the AWS API (observed) and which this tool
+    # builds from the caller identity (constructed) is part of the
+    # contract — the JSON envelope chunk will serialize it.
+    by_type = {
+        r.resource_type: r.arn_source for s in PROCESSORS for r in flatten_resources(s)
+    }
+    assert by_type == {
+        # ec2: the API returns no ARNs for these five types.
+        "ec2:instance": "constructed",
+        "ec2:volume": "constructed",
+        "ec2:security_group": "constructed",
+        "ec2:ami": "constructed",
+        "ec2:snapshot": "constructed",
+        # s3: ListBuckets returns no ARN; built from the documented format.
+        "s3:bucket": "constructed",
+        # vpc: only describe_subnets returns an ARN.
+        "vpc": "constructed",
+        "vpc:subnet": "observed",
+        "vpc:nat_gateway": "constructed",
+        "vpc:internet_gateway": "constructed",
+        "vpc:route_table": "constructed",
+        "vpc:dhcp_options": "constructed",
+        "vpc:peering_connection": "constructed",
+        "vpc:endpoint": "constructed",
+        # elb/ecs/efs/rds: every ARN comes straight from the API.
+        "elbv2:load_balancer_application": "observed",
+        "elbv2:listener": "observed",
+        "elbv2:listener_rule": "observed",
+        "elbv2:target_group": "observed",
+        "ecs:cluster": "observed",
+        "ecs:service": "observed",
+        "ecs:task_definition": "observed",
+        "ecs:capacity_provider": "observed",
+        "efs:file_system": "observed",
+        "rds:db_instance": "observed",
+        "rds:db_cluster": "observed",
+        "rds:db_snapshot": "observed",
+        "rds:db_cluster_snapshot": "observed",
+        # autoscaling: launch templates are the one type without an ARN.
+        "autoscaling:auto_scaling_group": "observed",
+        "autoscaling:launch_configuration": "observed",
+        "autoscaling:launch_template": "constructed",
+    }
+
+
+def test_constructed_arns_follow_the_documented_formats() -> None:
+    # Formats verified against AWS's Service Authorization Reference
+    # (servicereference.us-east-1.amazonaws.com). Note image and snapshot
+    # ARNs have an EMPTY account field, and launch templates are an ec2
+    # resource.
+    ec2 = {r["resource_type"]: r["resource_arn"] for r in flatten("ec2")}
+    assert ec2 == {
+        "ec2:instance": "arn:aws:ec2:eu-central-1:111122223333:instance/i-1",
+        "ec2:volume": "arn:aws:ec2:eu-central-1:111122223333:volume/vol-1",
+        "ec2:security_group": "arn:aws:ec2:eu-central-1:111122223333:security-group/sg-1",
+        "ec2:ami": "arn:aws:ec2:eu-central-1::image/ami-1",
+        "ec2:snapshot": "arn:aws:ec2:eu-central-1::snapshot/snap-1",
+    }
+
+    vpc = {r["resource_type"]: r["resource_arn"] for r in flatten("vpc")}
+    assert vpc == {
+        "vpc": "arn:aws:ec2:eu-central-1:111122223333:vpc/vpc-1",
+        "vpc:subnet": "arn:aws:ec2:eu-central-1:111122223333:subnet/subnet-1",
+        "vpc:nat_gateway": "arn:aws:ec2:eu-central-1:111122223333:natgateway/nat-1",
+        "vpc:internet_gateway": "arn:aws:ec2:eu-central-1:111122223333:internet-gateway/igw-1",
+        "vpc:route_table": "arn:aws:ec2:eu-central-1:111122223333:route-table/rtb-1",
+        "vpc:dhcp_options": "arn:aws:ec2:eu-central-1:111122223333:dhcp-options/dopt-1",
+        "vpc:peering_connection": "arn:aws:ec2:eu-central-1:111122223333:vpc-peering-connection/pcx-1",
+        "vpc:endpoint": "arn:aws:ec2:eu-central-1:111122223333:vpc-endpoint/vpce-1",
+    }
+
+    asg = {r["resource_type"]: r["resource_arn"] for r in flatten("autoscaling")}
+    assert (
+        asg["autoscaling:launch_template"]
+        == "arn:aws:ec2:eu-central-1:111122223333:launch-template/lt-1"
+    )
+
+    assert flatten("s3")[0]["resource_arn"] == "arn:aws:s3:::my-bucket"
+
+
+def test_partition_flows_into_every_constructed_arn() -> None:
+    # A GovCloud caller must never produce an arn:aws: constructed ARN.
+    for service in PROCESSORS:
+        for resource in flatten_resources(service, identity=GOV_IDENTITY):
+            if resource.arn_source == "constructed":
+                assert resource.resource_arn.startswith("arn:aws-us-gov:"), resource
+
+
 def test_resource_name_is_optional_and_that_is_load_bearing() -> None:
     # Characterization: ec2 instances and every ecs record omit resource_name;
     # consumers must keep falling back to resource_id. The typed-Resource
@@ -272,16 +380,98 @@ def test_identity_fields_per_producer() -> None:
     assert s3_record["resource_id"] == "my-bucket"
     assert s3_record["resource_arn"] == "arn:aws:s3:::my-bucket"
 
-    # elbv2 records never carry an id — the ARN is the identity.
-    assert all(r["resource_id"] == "N/A" for r in flatten("elb"))
-    assert all(r["resource_arn"] != "N/A" for r in flatten("elb"))
+    # elbv2 ids are extracted from the observed ARN and keep the full
+    # path after the resource-type segment — AWS's own id shape.
+    elb_records = {r["resource_type"]: r for r in flatten("elb")}
+    assert (
+        elb_records["elbv2:load_balancer_application"]["resource_id"]
+        == "app/my-alb/abc"
+    )
+    assert elb_records["elbv2:listener"]["resource_id"] == "app/my-alb/abc/ghi"
+    assert elb_records["elbv2:listener_rule"]["resource_id"] == "app/my-alb/abc/ghi/jkl"
+    assert elb_records["elbv2:target_group"]["resource_id"] == "my-tg/def"
 
     ecs_records = {r["resource_type"]: r for r in flatten("ecs")}
     assert ecs_records["ecs:task_definition"]["resource_id"] == "api:3"
 
     asg_records = {r["resource_type"]: r for r in flatten("autoscaling")}
     assert asg_records["autoscaling:launch_template"]["resource_id"] == "lt-1"
-    assert asg_records["autoscaling:launch_template"]["resource_arn"] == "N/A"
+
+
+def test_resource_missing_its_id_is_skipped_not_emitted_as_na() -> None:
+    # A raw dict without its id key cannot be identified: skip it (with a
+    # log line) rather than emit a record with a fake identity.
+    resources: list[Resource] = []
+    process_ec2_output(
+        {"instances": [{"Tags": []}, {"InstanceId": "i-2", "Tags": []}]},
+        REGION,
+        resources,
+        IDENTITY,
+    )
+    assert [r.resource_id for r in resources] == ["i-2"]
+
+
+@pytest.mark.parametrize("service", sorted(PROCESSORS))
+def test_unidentifiable_resources_are_skipped_by_every_producer(service: str) -> None:
+    # One id-less/ARN-less dict under every result key: nothing a
+    # producer cannot identify may reach the output.
+    data: dict[str, Any] = {key: [{}] for key in SERVICE_FIXTURES[service]}
+    resources: list[Resource] = []
+    PROCESSORS[service](data, REGION, resources, IDENTITY)
+    assert resources == []
+
+
+def test_subnet_without_an_observed_arn_gets_a_constructed_one() -> None:
+    # describe_subnets normally returns SubnetArn; if it is absent the
+    # subnet still gets the documented constructed ARN, never "N/A".
+    resources: list[Resource] = []
+    process_vpc_output(
+        {"subnets": [{"SubnetId": "subnet-9", "CidrBlock": "10.0.9.0/24"}]},
+        REGION,
+        resources,
+        IDENTITY,
+    )
+    (subnet,) = resources
+    assert (
+        subnet.resource_arn == "arn:aws:ec2:eu-central-1:111122223333:subnet/subnet-9"
+    )
+    assert subnet.arn_source == "constructed"
+
+
+def test_same_resource_yields_the_same_identity_via_both_scan_paths() -> None:
+    # Path independence: whether a resource is found by its service
+    # scanner or by the Resource Groups tag scan, its id and ARN are
+    # identical. Nothing else pins this guarantee.
+    service_side = {
+        (r.resource_id, r.resource_arn)
+        for r in flatten_resources("s3") + flatten_resources("elb")
+    }
+
+    tagging_data = {
+        "buckets": [
+            {"ResourceARN": "arn:aws:s3:::my-bucket", "ResourceType": "s3:bucket"}
+        ],
+        "listeners": [
+            {
+                "ResourceARN": SERVICE_FIXTURES["elb"]["listeners"][0]["ListenerArn"],
+                "ResourceType": "elasticloadbalancing:listener",
+            }
+        ],
+        "loadbalancers": [
+            {
+                "ResourceARN": SERVICE_FIXTURES["elb"]["load_balancers"][0][
+                    "LoadBalancerArn"
+                ],
+                "ResourceType": "elasticloadbalancing:loadbalancer",
+            }
+        ],
+    }
+    tagging_side: list[Resource] = []
+    process_generic_service_output(tagging_data, REGION, tagging_side, IDENTITY)
+
+    assert tagging_side, "tagging path produced no records"
+    for resource in tagging_side:
+        assert (resource.resource_id, resource.resource_arn) in service_side, resource
 
 
 def test_generic_processor_flattens_resource_groups_records() -> None:
@@ -296,14 +486,19 @@ def test_generic_processor_flattens_resource_groups_records() -> None:
             },
             {
                 "ResourceARN": "arn:aws:lambda:eu-central-1:1:function:fn",
-                "ResourceId": None,  # extraction can fail — must not crash
+                "ResourceId": None,  # upstream extraction failed: re-derive it
                 "ResourceType": "lambda:function",
+            },
+            {
+                # No ARN at all: unidentifiable, skipped with a log line.
+                "ResourceType": "mystery:thing",
             },
         ]
     }
     resources: list[Resource] = []
-    process_generic_service_output(service_data, REGION, resources)
+    process_generic_service_output(service_data, REGION, resources, IDENTITY)
 
+    assert all(r.arn_source == "observed" for r in resources)
     assert [resource.to_record() for resource in resources] == [
         {
             "region": REGION,
@@ -314,7 +509,7 @@ def test_generic_processor_flattens_resource_groups_records() -> None:
         {
             "region": REGION,
             "resource_type": "lambda:function",
-            "resource_id": "N/A",
+            "resource_id": "fn",
             "resource_arn": "arn:aws:lambda:eu-central-1:1:function:fn",
         },
     ]

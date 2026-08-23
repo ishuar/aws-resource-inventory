@@ -321,7 +321,7 @@ def scan_command(
                 "[dim]Results will be a combination of cached and real-time data.[/dim]"
             )
 
-    # Get AWS session and validate credentials
+    # Get AWS session
     try:
         if debug:
             with logger.timer("AWS session creation"):
@@ -329,57 +329,6 @@ def scan_command(
                 session = get_session(profile)
         else:
             session = get_session(profile)
-
-        # Validate AWS credentials before proceeding
-        if debug:
-            with logger.timer("AWS credential validation"):
-                logger.debug("Validating AWS credentials")
-                credentials_valid, credential_message = validate_aws_credentials(
-                    session, profile
-                )
-        else:
-            credentials_valid, credential_message = validate_aws_credentials(
-                session, profile
-            )
-
-        if not credentials_valid:
-            logger.error("AWS credential validation failed: %s", credential_message)
-            console.print(f"\n[red]{credential_message}[/red]")
-            console.print("\n[yellow]💡 Possible solutions:[/yellow]")
-            console.print("   • [dim]Configure AWS credentials: aws configure[/dim]")
-            console.print(
-                "   • [dim]Set AWS profile: export AWS_PROFILE=your-profile[/dim]"
-            )
-            console.print(
-                "   • [dim]Use AWS SSO: aws sso login --profile your-profile[/dim]"
-            )
-            console.print(
-                "   • [dim]Check existing profiles: aws configure list-profiles[/dim]"
-            )
-
-            # Check if there are cached results that could be shown
-            if use_cache:
-                logger.debug("Checking for cached results as fallback")
-                console.print("\n[cyan]Checking for cached results...[/cyan]")
-                has_cache = _check_cache_availability(
-                    region_list, services, tag_key, tag_value, all_services
-                )
-                if has_cache:
-                    logger.info("Found cached results - proceeding with cached data")
-                    console.print(
-                        "[yellow]⚠️  Found cached results from previous scans.[/yellow]"
-                    )
-                    console.print(
-                        "[dim]Note: Cached data may be outdated. Set up AWS credentials for real-time results.[/dim]"
-                    )
-                else:
-                    logger.error("No cached results available and credentials invalid")
-                    console.print("[red]No cached results available.[/red]")
-                    raise typer.Exit(1)
-        else:
-            logger.info("AWS credentials validated successfully")
-            console.print(f"\n[green]{credential_message}[/green]")
-
     except RuntimeError as e:
         logger.log_error_context(
             e, {"profile": profile, "operation": "AWS session creation"}
@@ -389,6 +338,42 @@ def scan_command(
             "\n[yellow]💡 Please check your AWS configuration and try again.[/yellow]"
         )
         raise typer.Exit(1) from None
+
+    # Validate credentials outside the try above: typer.Exit subclasses
+    # RuntimeError and must not be swallowed by the session error handler.
+    if debug:
+        with logger.timer("AWS credential validation"):
+            logger.debug("Validating AWS credentials")
+            credentials_valid, credential_message, caller_identity = (
+                validate_aws_credentials(session, profile)
+            )
+    else:
+        credentials_valid, credential_message, caller_identity = (
+            validate_aws_credentials(session, profile)
+        )
+
+    if not credentials_valid or caller_identity is None:
+        logger.error("AWS credential validation failed: %s", credential_message)
+        console.print(f"\n[red]{credential_message}[/red]")
+        console.print("\n[yellow]💡 Possible solutions:[/yellow]")
+        console.print("   • [dim]Configure AWS credentials: aws configure[/dim]")
+        console.print(
+            "   • [dim]Set AWS profile: export AWS_PROFILE=your-profile[/dim]"
+        )
+        console.print(
+            "   • [dim]Use AWS SSO: aws sso login --profile your-profile[/dim]"
+        )
+        console.print(
+            "   • [dim]Check existing profiles: aws configure list-profiles[/dim]"
+        )
+        # Every resource identity is anchored to the caller's account and
+        # partition (constructed ARNs need both), so output cannot be
+        # produced without valid credentials. The old "show cached results
+        # anyway" fallback is gone for the same reason.
+        raise typer.Exit(1)
+
+    logger.info("AWS credentials validated successfully")
+    console.print(f"\n[green]{credential_message}[/green]")
 
     # Handle dry run
     if dry_run:
@@ -582,6 +567,7 @@ def scan_command(
                 current_output_file,
                 output_format,
                 debug,
+                identity=caller_identity,
                 source=scan_source,
             )
 
@@ -897,33 +883,6 @@ def _display_scan_completion(
         console.print(
             f"[green]📊 Found {resource_count} resources across {len(all_results)} region{'s' if len(all_results) > 1 else ''} in {scan_duration:.1f}s[/green]"
         )
-
-
-def _check_cache_availability(
-    region_list: list[str],
-    services: list[str],
-    tag_key: str | None,
-    tag_value: str | None,
-    all_services: bool,
-) -> bool:
-    """Check if cached results are available for the given parameters."""
-    from aws_resource_inventory.lib.cache import get_cached_result
-
-    for region in region_list:
-        if should_use_resource_groups_api(tag_key, tag_value, all_services):
-            # Check cross-service cache
-            cached_result = get_cached_result(
-                region, "all_services", tag_key, tag_value
-            )
-            if cached_result is not None:
-                return True
-        else:
-            # Check individual service caches
-            for service in services:
-                cached_result = get_cached_result(region, service, tag_key, tag_value)
-                if cached_result is not None:
-                    return True
-    return False
 
 
 def _handle_refresh_continuation(

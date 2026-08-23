@@ -14,6 +14,7 @@ from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
+from .arn import extract_resource_id_from_arn
 from .clients import get_scan_client
 from .logging import get_logger, get_output_console
 
@@ -92,7 +93,7 @@ def get_all_tagged_resources_across_services(
                     # Create comprehensive resource object
                     resource_obj = {
                         "ResourceARN": resource_arn,
-                        "ResourceId": _extract_resource_id_from_arn(
+                        "ResourceId": extract_resource_id_from_arn(
                             resource_arn, f"{service_name}:{resource_type}"
                         ),
                         "ResourceType": f"{service_name}:{resource_type}",
@@ -142,39 +143,6 @@ def _extract_service_and_type_from_arn(arn: str) -> tuple[str, str]:
         pass
 
     return "", ""
-
-
-def _extract_resource_id_from_arn(arn: str, resource_type: str) -> str | None:
-    """Extract the resource ID from an AWS ARN based on resource type."""
-    try:
-        if resource_type in ["s3:bucket"]:
-            # S3 buckets: arn:aws:s3:::bucket-name
-            return arn.split(":::")[-1] if ":::" in arn else None
-        elif resource_type.startswith("elasticloadbalancing:"):
-            # ELB resources: arn:aws:elasticloadbalancing:region:account:loadbalancer/type/name/id
-            # or arn:aws:elasticloadbalancing:region:account:targetgroup/name/id
-            parts = arn.split("/")
-            if len(parts) >= 2:
-                if (
-                    resource_type == "elasticloadbalancing:loadbalancer"
-                    and len(parts) >= 4
-                ):
-                    return f"{parts[1]}/{parts[2]}/{parts[3]}"  # type/name/id
-                elif (
-                    resource_type == "elasticloadbalancing:targetgroup"
-                    and len(parts) >= 3
-                ):
-                    return f"{parts[1]}/{parts[2]}"  # name/id
-        elif "/" in arn:
-            # Most resources: arn:aws:service:region:account:resource-type/resource-id
-            return arn.split("/")[-1]
-        else:
-            # Some resources use colon separator
-            return arn.split(":")[-1]
-    except (IndexError, ValueError):
-        pass
-
-    return None
 
 
 def should_use_resource_groups_api(
@@ -230,7 +198,7 @@ def scan_all_tagged_resources(
     # Import here to avoid circular imports
     from concurrent.futures import ThreadPoolExecutor
 
-    from services.autoscaling_service import scan_autoscaling
+    from aws_resource_inventory.services.autoscaling_service import scan_autoscaling
 
     logger.debug("Starting hybrid scan: Resource Groups API + Auto Scaling")
 
