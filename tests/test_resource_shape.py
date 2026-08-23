@@ -212,46 +212,46 @@ def test_resource_types_are_pinned_per_producer() -> None:
     }
     assert by_service == {
         "ec2": [
-            "ec2:ami",
+            "ec2:image",
             "ec2:instance",
-            "ec2:security_group",
+            "ec2:security-group",
             "ec2:snapshot",
             "ec2:volume",
         ],
         "s3": ["s3:bucket"],
         "vpc": [
-            "vpc:dhcp_options",
-            "vpc:endpoint",
-            "vpc:internet_gateway",
-            "vpc:nat_gateway",
-            "vpc:peering_connection",
-            "vpc:route_table",
+            "vpc:dhcp-options",
+            "vpc:internet-gateway",
+            "vpc:natgateway",
+            "vpc:route-table",
             "vpc:subnet",
             "vpc:vpc",
+            "vpc:vpc-endpoint",
+            "vpc:vpc-peering-connection",
         ],
         "elb": [
             "elb:listener",
-            "elb:listener_rule",
-            "elb:load_balancer_application",
-            "elb:target_group",
+            "elb:listener-rule",
+            "elb:loadbalancer-application",
+            "elb:targetgroup",
         ],
         "ecs": [
-            "ecs:capacity_provider",
+            "ecs:capacity-provider",
             "ecs:cluster",
             "ecs:service",
-            "ecs:task_definition",
+            "ecs:task-definition",
         ],
-        "efs": ["efs:file_system"],
+        "efs": ["efs:file-system"],
         "autoscaling": [
-            "autoscaling:auto_scaling_group",
-            "autoscaling:launch_configuration",
-            "autoscaling:launch_template",
+            "autoscaling:autoScalingGroup",
+            "autoscaling:launch-template",
+            "autoscaling:launchConfiguration",
         ],
         "rds": [
-            "rds:db_cluster",
-            "rds:db_cluster_snapshot",
-            "rds:db_instance",
-            "rds:db_snapshot",
+            "rds:cluster",
+            "rds:cluster-snapshot",
+            "rds:db",
+            "rds:snapshot",
         ],
     }
 
@@ -291,8 +291,8 @@ def test_load_balancer_flavour_comes_from_aws_type_attribute() -> None:
         IDENTITY,
     )
     gwlb, untyped = resources
-    assert gwlb.resource_type == "elb:load_balancer_gateway"
-    assert untyped.resource_type == "elb:load_balancer"
+    assert gwlb.resource_type == "elb:loadbalancer-gateway"
+    assert untyped.resource_type == "elb:loadbalancer"
 
 
 def test_arn_source_is_pinned_per_producer() -> None:
@@ -306,38 +306,38 @@ def test_arn_source_is_pinned_per_producer() -> None:
         # ec2: the API returns no ARNs for these five types.
         "ec2:instance": "constructed",
         "ec2:volume": "constructed",
-        "ec2:security_group": "constructed",
-        "ec2:ami": "constructed",
+        "ec2:security-group": "constructed",
+        "ec2:image": "constructed",
         "ec2:snapshot": "constructed",
         # s3: ListBuckets returns no ARN; built from the documented format.
         "s3:bucket": "constructed",
         # vpc: only describe_subnets returns an ARN.
         "vpc:vpc": "constructed",
         "vpc:subnet": "observed",
-        "vpc:nat_gateway": "constructed",
-        "vpc:internet_gateway": "constructed",
-        "vpc:route_table": "constructed",
-        "vpc:dhcp_options": "constructed",
-        "vpc:peering_connection": "constructed",
-        "vpc:endpoint": "constructed",
+        "vpc:natgateway": "constructed",
+        "vpc:internet-gateway": "constructed",
+        "vpc:route-table": "constructed",
+        "vpc:dhcp-options": "constructed",
+        "vpc:vpc-peering-connection": "constructed",
+        "vpc:vpc-endpoint": "constructed",
         # elb/ecs/efs/rds: every ARN comes straight from the API.
-        "elb:load_balancer_application": "observed",
+        "elb:loadbalancer-application": "observed",
         "elb:listener": "observed",
-        "elb:listener_rule": "observed",
-        "elb:target_group": "observed",
+        "elb:listener-rule": "observed",
+        "elb:targetgroup": "observed",
         "ecs:cluster": "observed",
         "ecs:service": "observed",
-        "ecs:task_definition": "observed",
-        "ecs:capacity_provider": "observed",
-        "efs:file_system": "observed",
-        "rds:db_instance": "observed",
-        "rds:db_cluster": "observed",
-        "rds:db_snapshot": "observed",
-        "rds:db_cluster_snapshot": "observed",
+        "ecs:task-definition": "observed",
+        "ecs:capacity-provider": "observed",
+        "efs:file-system": "observed",
+        "rds:db": "observed",
+        "rds:cluster": "observed",
+        "rds:snapshot": "observed",
+        "rds:cluster-snapshot": "observed",
         # autoscaling: launch templates are the one type without an ARN.
-        "autoscaling:auto_scaling_group": "observed",
-        "autoscaling:launch_configuration": "observed",
-        "autoscaling:launch_template": "constructed",
+        "autoscaling:autoScalingGroup": "observed",
+        "autoscaling:launchConfiguration": "observed",
+        "autoscaling:launch-template": "constructed",
     }
 
 
@@ -354,8 +354,8 @@ def test_constructed_arns_follow_the_documented_formats() -> None:
     assert ec2 == {
         "ec2:instance": "arn:aws:ec2:eu-central-1:111122223333:instance/i-1",
         "ec2:volume": "arn:aws:ec2:eu-central-1:111122223333:volume/vol-1",
-        "ec2:security_group": "arn:aws:ec2:eu-central-1:111122223333:security-group/sg-1",
-        "ec2:ami": "arn:aws:ec2:eu-central-1:111122223333:image/ami-1",
+        "ec2:security-group": "arn:aws:ec2:eu-central-1:111122223333:security-group/sg-1",
+        "ec2:image": "arn:aws:ec2:eu-central-1:111122223333:image/ami-1",
         "ec2:snapshot": "arn:aws:ec2:eu-central-1:111122223333:snapshot/snap-1",
     }
 
@@ -363,17 +363,17 @@ def test_constructed_arns_follow_the_documented_formats() -> None:
     assert vpc == {
         "vpc:vpc": "arn:aws:ec2:eu-central-1:111122223333:vpc/vpc-1",
         "vpc:subnet": "arn:aws:ec2:eu-central-1:111122223333:subnet/subnet-1",
-        "vpc:nat_gateway": "arn:aws:ec2:eu-central-1:111122223333:natgateway/nat-1",
-        "vpc:internet_gateway": "arn:aws:ec2:eu-central-1:111122223333:internet-gateway/igw-1",
-        "vpc:route_table": "arn:aws:ec2:eu-central-1:111122223333:route-table/rtb-1",
-        "vpc:dhcp_options": "arn:aws:ec2:eu-central-1:111122223333:dhcp-options/dopt-1",
-        "vpc:peering_connection": "arn:aws:ec2:eu-central-1:111122223333:vpc-peering-connection/pcx-1",
-        "vpc:endpoint": "arn:aws:ec2:eu-central-1:111122223333:vpc-endpoint/vpce-1",
+        "vpc:natgateway": "arn:aws:ec2:eu-central-1:111122223333:natgateway/nat-1",
+        "vpc:internet-gateway": "arn:aws:ec2:eu-central-1:111122223333:internet-gateway/igw-1",
+        "vpc:route-table": "arn:aws:ec2:eu-central-1:111122223333:route-table/rtb-1",
+        "vpc:dhcp-options": "arn:aws:ec2:eu-central-1:111122223333:dhcp-options/dopt-1",
+        "vpc:vpc-peering-connection": "arn:aws:ec2:eu-central-1:111122223333:vpc-peering-connection/pcx-1",
+        "vpc:vpc-endpoint": "arn:aws:ec2:eu-central-1:111122223333:vpc-endpoint/vpce-1",
     }
 
     asg = {r["resource_type"]: r["resource_arn"] for r in flatten("autoscaling")}
     assert (
-        asg["autoscaling:launch_template"]
+        asg["autoscaling:launch-template"]
         == "arn:aws:ec2:eu-central-1:111122223333:launch-template/lt-1"
     )
 
@@ -415,17 +415,17 @@ def test_identity_fields_per_producer() -> None:
     # path after the resource-type segment — AWS's own id shape.
     elb_records = {r["resource_type"]: r for r in flatten("elb")}
     assert (
-        elb_records["elb:load_balancer_application"]["resource_id"] == "app/my-alb/abc"
+        elb_records["elb:loadbalancer-application"]["resource_id"] == "app/my-alb/abc"
     )
     assert elb_records["elb:listener"]["resource_id"] == "app/my-alb/abc/ghi"
-    assert elb_records["elb:listener_rule"]["resource_id"] == "app/my-alb/abc/ghi/jkl"
-    assert elb_records["elb:target_group"]["resource_id"] == "my-tg/def"
+    assert elb_records["elb:listener-rule"]["resource_id"] == "app/my-alb/abc/ghi/jkl"
+    assert elb_records["elb:targetgroup"]["resource_id"] == "my-tg/def"
 
     ecs_records = {r["resource_type"]: r for r in flatten("ecs")}
-    assert ecs_records["ecs:task_definition"]["resource_id"] == "api:3"
+    assert ecs_records["ecs:task-definition"]["resource_id"] == "api:3"
 
     asg_records = {r["resource_type"]: r for r in flatten("autoscaling")}
-    assert asg_records["autoscaling:launch_template"]["resource_id"] == "lt-1"
+    assert asg_records["autoscaling:launch-template"]["resource_id"] == "lt-1"
 
 
 def test_resource_missing_its_id_is_skipped_not_emitted_as_na() -> None:

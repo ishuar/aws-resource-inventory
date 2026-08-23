@@ -164,7 +164,7 @@ def process_elb_output(
                 region=region,
                 resource_name=lb_name,
                 resource_type=(
-                    f"elb:load_balancer_{lb_type}" if lb_type else "elb:load_balancer"
+                    f"elb:loadbalancer-{lb_type}" if lb_type else "elb:loadbalancer"
                 ),
                 resource_id=lb_id,
                 resource_arn=lb_arn,
@@ -206,7 +206,7 @@ def process_elb_output(
             Resource(
                 region=region,
                 resource_name=f"Rule-{priority}",
-                resource_type="elb:listener_rule",
+                resource_type="elb:listener-rule",
                 resource_id=rule_id,
                 resource_arn=rule_arn,
                 arn_source="observed",
@@ -225,7 +225,7 @@ def process_elb_output(
             Resource(
                 region=region,
                 resource_name=tg_name,
-                resource_type="elb:target_group",
+                resource_type="elb:targetgroup",
                 resource_id=tg_id,
                 resource_arn=tg_arn,
                 arn_source="observed",

@@ -106,7 +106,7 @@ def process_autoscaling_output(
         asg_arn = asg.get("AutoScalingGroupARN")
         if not asg_name or not asg_arn:
             logger.warning(
-                "Skipping autoscaling:auto_scaling_group in %s: missing name or ARN",
+                "Skipping autoscaling:autoScalingGroup in %s: missing name or ARN",
                 region,
             )
             continue
@@ -115,7 +115,7 @@ def process_autoscaling_output(
             Resource(
                 region=region,
                 resource_name=asg_name,
-                resource_type="autoscaling:auto_scaling_group",
+                resource_type="autoscaling:autoScalingGroup",
                 resource_id=asg_name,
                 resource_arn=asg_arn,
                 arn_source="observed",
@@ -128,7 +128,7 @@ def process_autoscaling_output(
         lc_arn = lc.get("LaunchConfigurationARN")
         if not lc_name or not lc_arn:
             logger.warning(
-                "Skipping autoscaling:launch_configuration in %s: missing name or ARN",
+                "Skipping autoscaling:launchConfiguration in %s: missing name or ARN",
                 region,
             )
             continue
@@ -137,7 +137,7 @@ def process_autoscaling_output(
             Resource(
                 region=region,
                 resource_name=lc_name,
-                resource_type="autoscaling:launch_configuration",
+                resource_type="autoscaling:launchConfiguration",
                 resource_id=lc_name,
                 resource_arn=lc_arn,
                 arn_source="observed",
@@ -149,7 +149,7 @@ def process_autoscaling_output(
         lt_id = lt.get("LaunchTemplateId")
         if not lt_id:
             logger.warning(
-                "Skipping autoscaling:launch_template in %s: missing id", region
+                "Skipping autoscaling:launch-template in %s: missing id", region
             )
             continue
         lt_name = lt.get("LaunchTemplateName", "N/A")
@@ -158,7 +158,7 @@ def process_autoscaling_output(
             Resource(
                 region=region,
                 resource_name=lt_name,
-                resource_type="autoscaling:launch_template",
+                resource_type="autoscaling:launch-template",
                 resource_id=lt_id,
                 # The API returns no launch template ARN; it is an EC2
                 # resource, constructed per the documented format.

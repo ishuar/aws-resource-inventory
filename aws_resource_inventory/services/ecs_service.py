@@ -200,14 +200,14 @@ def process_ecs_output(
     for task_def in service_data.get("task_definitions", []):
         task_def_arn = task_def.get("taskDefinitionArn")
         if not task_def_arn:
-            _skip_missing_identity("ecs:task_definition", region)
+            _skip_missing_identity("ecs:task-definition", region)
             continue
         task_def_name = task_def_arn.split("/")[-1]
 
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_type="ecs:task_definition",  # Unified format: service:type
+                resource_type="ecs:task-definition",  # Unified format: service:type
                 resource_id=task_def_name,
                 resource_arn=task_def_arn,
                 arn_source="observed",
@@ -219,13 +219,13 @@ def process_ecs_output(
         cp_name = cp.get("name")
         cp_arn = cp.get("capacityProviderArn")
         if not cp_name or not cp_arn:
-            _skip_missing_identity("ecs:capacity_provider", region)
+            _skip_missing_identity("ecs:capacity-provider", region)
             continue
 
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_type="ecs:capacity_provider",  # Unified format: service:type
+                resource_type="ecs:capacity-provider",  # Unified format: service:type
                 resource_id=cp_name,
                 resource_arn=cp_arn,
                 arn_source="observed",

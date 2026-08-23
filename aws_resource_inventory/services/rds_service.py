@@ -41,15 +41,15 @@ def scan_rds(session: Any, region: str) -> ScanResult:
 # Every RDS record follows the same pattern: the identifier field is the
 # id and the name, and the API returns the ARN directly.
 _RDS_RECORD_FIELDS: list[tuple[str, str, str, str]] = [
-    ("db_instances", "rds:db_instance", "DBInstanceIdentifier", "DBInstanceArn"),
-    ("db_clusters", "rds:db_cluster", "DBClusterIdentifier", "DBClusterArn"),
+    ("db_instances", "rds:db", "DBInstanceIdentifier", "DBInstanceArn"),
+    ("db_clusters", "rds:cluster", "DBClusterIdentifier", "DBClusterArn"),
     (
         "db_cluster_snapshots",
-        "rds:db_cluster_snapshot",
+        "rds:cluster-snapshot",
         "DBClusterSnapshotIdentifier",
         "DBClusterSnapshotArn",
     ),
-    ("db_snapshots", "rds:db_snapshot", "DBSnapshotIdentifier", "DBSnapshotArn"),
+    ("db_snapshots", "rds:snapshot", "DBSnapshotIdentifier", "DBSnapshotArn"),
 ]
 
 

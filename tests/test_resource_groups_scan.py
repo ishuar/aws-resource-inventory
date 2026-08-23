@@ -167,7 +167,7 @@ class TestTagScanFlattensEndToEnd:
         assert records["s3:bucket"]["resource_arn"] == "arn:aws:s3:::tagged-bucket"
         # Merged autoscaling side flattens through its service processor —
         # the exact hand-off the regression mangled.
-        assert records["autoscaling:auto_scaling_group"]["resource_id"] == "prod-asg"
+        assert records["autoscaling:autoScalingGroup"]["resource_id"] == "prod-asg"
         assert "launch_templates" not in records  # the mangled form must not exist
         assert count == len(records)
 

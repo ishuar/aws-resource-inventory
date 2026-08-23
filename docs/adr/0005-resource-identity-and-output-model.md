@@ -165,18 +165,17 @@ Field notes:
   a `schema_version` review.
 - Diff tooling must compare `.resources` only, because the `scan` block
   is non-deterministic by design.
-- The right half of `type` is this tool's vocabulary, not AWS's spelling.
-  We normalise to `snake_case` and prefer the name users say
-  (`ec2:ami`, not AWS's `image`; `vpc:internet_gateway`, not
-  `ec2:internet-gateway`), because the left half already carries the
-  `--service` round-trip and a stable, readable right half is what
-  dashboards group on. Where AWS's own data supplies a distinction, it
-  flows through verbatim rather than being enumerated here: the
-  load-balancer flavour suffix is the `Type` attribute elbv2 returns
-  (`elb:load_balancer_application` / `_network` / `_gateway`), so a
-  future AWS flavour needs no code change, and a response without
-  `Type` yields the base `elb:load_balancer` rather than an invented
-  suffix.
+- The right half of `type` is AWS's own spelling, taken from the ARN
+  resource-type segment: `ec2:image` (not `ami`), `vpc:internet-gateway`,
+  `vpc:natgateway`, `elb:targetgroup`, `efs:file-system`,
+  `autoscaling:autoScalingGroup` (AWS's camelCase is kept), `rds:db`.
+  No snake_case normalisation and no house synonyms, so a type can be
+  pasted into AWS docs, the console or another tool unchanged. The one
+  composed value is the load-balancer flavour: AWS's segment plus the
+  `Type` attribute elbv2 returns (`elb:loadbalancer-application` /
+  `-network` / `-gateway`), so a future AWS flavour needs no code
+  change, and a response without `Type` yields the base
+  `elb:loadbalancer`.
 - Type vocabulary is path-dependent. `source: "tagging"` passes through
   the Resource Groups API's own `ResourceType`
   (`elasticloadbalancing:listener`, `lambda:function`), so the left half

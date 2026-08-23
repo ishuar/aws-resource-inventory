@@ -115,7 +115,7 @@ def process_ec2_output(
     for sg in service_data.get("security_groups", []):
         sg_id = sg.get("GroupId")
         if not sg_id:
-            _skip_missing_id("ec2:security_group", region)
+            _skip_missing_id("ec2:security-group", region)
             continue
         sg_name = sg.get("GroupName", sg_id)
 
@@ -123,7 +123,7 @@ def process_ec2_output(
             Resource(
                 region=region,
                 resource_name=sg_name,
-                resource_type="ec2:security_group",
+                resource_type="ec2:security-group",
                 resource_id=sg_id,
                 resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:security-group/{sg_id}",
                 arn_source="constructed",
@@ -134,7 +134,7 @@ def process_ec2_output(
     for ami in service_data.get("amis", []):
         ami_id = ami.get("ImageId")
         if not ami_id:
-            _skip_missing_id("ec2:ami", region)
+            _skip_missing_id("ec2:image", region)
             continue
         ami_name = ami.get("Name", ami_id)
 
@@ -142,7 +142,7 @@ def process_ec2_output(
             Resource(
                 region=region,
                 resource_name=ami_name,
-                resource_type="ec2:ami",
+                resource_type="ec2:image",
                 resource_id=ami_id,
                 # The owner's account, because the scan asks only for
                 # self-owned images (Owners: ["self"]). The empty-account
