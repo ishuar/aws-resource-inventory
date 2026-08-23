@@ -34,9 +34,10 @@ that produced it, and the records inside it are unreliable as identity:
 4. `name` is the resource's real AWS name or `null` — never synthesised,
    never a copy of the id. `null` (not a missing key) keeps rows
    rectangular for pandas/Parquet/SQL.
-5. `type` is strictly `<CLI service key>:<AWS type>` (e.g.
-   `ec2:instance`, `vpc:vpc`, `elb:listener`): the left half is always a
-   valid `--service` value, so output round-trips into the CLI.
+5. `type` is `<CLI service key>:<AWS type>` (e.g. `ec2:instance`,
+   `vpc:vpc`, `elb:listener`) on `source: "services"`: the left half is
+   a valid `--service` value, so output round-trips into the CLI. On
+   `source: "tagging"` the vocabulary is AWS's own — see Consequences.
 
 ### JSON envelope
 
@@ -159,3 +160,13 @@ Field notes:
   a `schema_version` review.
 - Diff tooling must compare `.resources` only, because the `scan` block
   is non-deterministic by design.
+- Type vocabulary is path-dependent. `source: "tagging"` passes through
+  the Resource Groups API's own `ResourceType`
+  (`elasticloadbalancing:listener`, `lambda:function`), so the left half
+  is not a `--service` key and the same resource can carry a different
+  `type` than the service path gives it. Identity is unaffected: `id`
+  and `arn` are path-independent, pinned by
+  `test_same_resource_yields_the_same_identity_via_both_scan_paths`.
+  Consumers grouping by `type` across both sources must normalise.
+  Mapping the tagging vocabulary onto service keys is not done today; it
+  would change existing values, so it is a `schema_version` review.
