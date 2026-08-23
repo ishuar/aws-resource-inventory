@@ -419,7 +419,9 @@ execution traces, timing, and caller context; `--verbose` together with
 ### Performance Tuning
 
 - `--max-workers` (1-20) controls region-level parallelism; `--service-workers` (1-10) controls service-level parallelism.
-- `--cache` speeds up repeated scans (10-minute TTL); `--no-cache` forces fresh data.
+- `--cache` speeds up repeated scans (10-minute TTL). Entries live in
+`$XDG_CACHE_HOME/aws-resource-inventory`, falling back to
+`~/.cache/aws-resource-inventory` — owner-only, never shared `/tmp`; `--no-cache` forces fresh data.
 
 > [!NOTE]
 > Verbose logging adds roughly 10-20% overhead — use it for troubleshooting, not routine scans.

@@ -1,10 +1,11 @@
 """
-Cache module for AWS Scanner
+Cache module for aws-resource-inventory
 
 Handles caching of scan results to improve performance and reduce API calls.
 """
 
 import hashlib
+import os
 import pickle
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,8 +13,23 @@ from typing import Any, cast
 
 from .logging import get_logger
 
+
+def default_cache_dir() -> Path:
+    """The per-user directory holding cached scan results.
+
+    Not a shared temp directory: the entries are pickles of an account's
+    resource inventory, so a world-writable predictable path would let
+    any local user read them or hand `pickle.load` a payload of their
+    own. `XDG_CACHE_HOME` wins where it is set; `~/.cache` is the
+    fallback on every platform, so there is one path to document.
+    """
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg_cache_home) if xdg_cache_home else Path.home() / ".cache"
+    return base / "aws-resource-inventory"
+
+
 # Cache configuration
-CACHE_DIR = Path("/tmp/aws_scanner_cache")
+CACHE_DIR = default_cache_dir()
 CACHE_TTL_MINUTES = 10  # Cache TTL in minutes
 
 # Module logger
@@ -97,11 +113,21 @@ def cache_result(
 ) -> None:
     """Cache the scan result."""
     try:
-        CACHE_DIR.mkdir(exist_ok=True)
+        # parents: unlike /tmp, ~/.cache is not guaranteed to exist.
+        # mode: the entries are this account's inventory — owner only.
+        CACHE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # mkdir applies its mode only when it creates the directory, so a
+        # directory left behind at a wider mode keeps it — exactly the
+        # exposure ADR-0008 exists to close. Assert the mode every time.
+        CACHE_DIR.chmod(0o700)
         cache_key = get_cache_key(region, service, tag_key, tag_value)
         cache_file = CACHE_DIR / f"{cache_key}.pkl"
 
-        with open(cache_file, "wb") as f:
+        # Opened 0o600 rather than written and chmod'd: umask can only
+        # clear permission bits, never set them, so the entry is never
+        # briefly world-readable between creation and tightening.
+        descriptor = os.open(cache_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "wb") as f:
             pickle.dump(result, f)
 
         resource_count = (
