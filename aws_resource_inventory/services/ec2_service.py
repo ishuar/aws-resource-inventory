@@ -143,8 +143,11 @@ def process_ec2_output(
                 resource_name=ami_name,
                 resource_type="ec2:ami",
                 resource_id=ami_id,
-                # Image ARNs have an empty account field by definition.
-                resource_arn=f"arn:{identity.partition}:ec2:{region}::image/{ami_id}",
+                # The owner's account, because the scan asks only for
+                # self-owned images (Owners: ["self"]). The empty-account
+                # form in the IAM reference covers images shared from
+                # another account, which this scanner never returns.
+                resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:image/{ami_id}",
                 arn_source="constructed",
             )
         )
@@ -163,8 +166,9 @@ def process_ec2_output(
                 resource_name=snapshot_name,
                 resource_type="ec2:snapshot",
                 resource_id=snapshot_id,
-                # Snapshot ARNs have an empty account field by definition.
-                resource_arn=f"arn:{identity.partition}:ec2:{region}::snapshot/{snapshot_id}",
+                # The owner's account, as for images above: the scan asks
+                # only for self-owned snapshots (OwnerIds: ["self"]).
+                resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:snapshot/{snapshot_id}",
                 arn_source="constructed",
             )
         )

@@ -316,16 +316,20 @@ def test_arn_source_is_pinned_per_producer() -> None:
 
 def test_constructed_arns_follow_the_documented_formats() -> None:
     # Formats verified against AWS's Service Authorization Reference
-    # (servicereference.us-east-1.amazonaws.com). Note image and snapshot
-    # ARNs have an EMPTY account field, and launch templates are an ec2
-    # resource.
+    # (servicereference.us-east-1.amazonaws.com) and then against the
+    # ARNs the Resource Groups Tagging API reports for real resources in
+    # a live account — which is what caught image and snapshot: the
+    # reference shows them with an empty account field (that form covers
+    # AMIs shared from other accounts), but AWS reports an owned image or
+    # snapshot with the owner's account, and this scanner only ever asks
+    # for self-owned ones. Launch templates are an ec2 resource.
     ec2 = {r["resource_type"]: r["resource_arn"] for r in flatten("ec2")}
     assert ec2 == {
         "ec2:instance": "arn:aws:ec2:eu-central-1:111122223333:instance/i-1",
         "ec2:volume": "arn:aws:ec2:eu-central-1:111122223333:volume/vol-1",
         "ec2:security_group": "arn:aws:ec2:eu-central-1:111122223333:security-group/sg-1",
-        "ec2:ami": "arn:aws:ec2:eu-central-1::image/ami-1",
-        "ec2:snapshot": "arn:aws:ec2:eu-central-1::snapshot/snap-1",
+        "ec2:ami": "arn:aws:ec2:eu-central-1:111122223333:image/ami-1",
+        "ec2:snapshot": "arn:aws:ec2:eu-central-1:111122223333:snapshot/snap-1",
     }
 
     vpc = {r["resource_type"]: r["resource_arn"] for r in flatten("vpc")}
