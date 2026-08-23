@@ -50,7 +50,7 @@ duration_seconds), a `summary` (total, by_region, by_type), and
   "schema_version": 1,
   "scan": {
     "tool": { "name": "aws-resource-inventory", "version": "0.1.1" },
-    "account": "505442339661",
+    "account": "123456789012",
     "partition": "aws",
     "regions": ["eu-central-1"],
     "source": "services",
@@ -74,7 +74,7 @@ duration_seconds), a `summary` (total, by_region, by_type), and
       "type": "ec2:instance",
       "id": "i-0abc123def456789a",
       "name": "web-server-prod-01",
-      "arn": "arn:aws:ec2:eu-central-1:505442339661:instance/i-0abc123def456789a",
+      "arn": "arn:aws:ec2:eu-central-1:123456789012:instance/i-0abc123def456789a",
       "arn_source": "constructed"
     },
     {
@@ -82,7 +82,7 @@ duration_seconds), a `summary` (total, by_region, by_type), and
       "type": "elb:listener",
       "id": "app/my-alb/1a2b3c4d5e6f7g8h/9i8j7k6l",
       "name": null,
-      "arn": "arn:aws:elasticloadbalancing:eu-central-1:505442339661:listener/app/my-alb/1a2b3c4d5e6f7g8h/9i8j7k6l",
+      "arn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/my-alb/1a2b3c4d5e6f7g8h/9i8j7k6l",
       "arn_source": "observed"
     },
     {
@@ -90,7 +90,7 @@ duration_seconds), a `summary` (total, by_region, by_type), and
       "type": "vpc:vpc",
       "id": "vpc-0f1e2d3c",
       "name": null,
-      "arn": "arn:aws:ec2:eu-central-1:505442339661:vpc/vpc-0f1e2d3c",
+      "arn": "arn:aws:ec2:eu-central-1:123456789012:vpc/vpc-0f1e2d3c",
       "arn_source": "constructed"
     }
   ]
