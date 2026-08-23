@@ -153,7 +153,10 @@ def process_elb_output(
         lb_name = lb.get("LoadBalancerName", "N/A")
         # The flavour suffix is AWS's own Type attribute ("application" |
         # "network" | "gateway") — never an enum here, so a new AWS
-        # flavour flows through unchanged.
+        # flavour flows through unchanged. elbv2 always returns Type, so
+        # the absent case only fires if that contract breaks; it degrades
+        # to the coarser base type rather than dropping a load balancer
+        # that has a perfectly good ARN and id.
         lb_type = lb.get("Type")
 
         flattened_resources.append(

@@ -165,6 +165,18 @@ Field notes:
   a `schema_version` review.
 - Diff tooling must compare `.resources` only, because the `scan` block
   is non-deterministic by design.
+- The right half of `type` is this tool's vocabulary, not AWS's spelling.
+  We normalise to `snake_case` and prefer the name users say
+  (`ec2:ami`, not AWS's `image`; `vpc:internet_gateway`, not
+  `ec2:internet-gateway`), because the left half already carries the
+  `--service` round-trip and a stable, readable right half is what
+  dashboards group on. Where AWS's own data supplies a distinction, it
+  flows through verbatim rather than being enumerated here: the
+  load-balancer flavour suffix is the `Type` attribute elbv2 returns
+  (`elb:load_balancer_application` / `_network` / `_gateway`), so a
+  future AWS flavour needs no code change, and a response without
+  `Type` yields the base `elb:load_balancer` rather than an invented
+  suffix.
 - Type vocabulary is path-dependent. `source: "tagging"` passes through
   the Resource Groups API's own `ResourceType`
   (`elasticloadbalancing:listener`, `lambda:function`), so the left half

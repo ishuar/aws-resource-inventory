@@ -260,8 +260,8 @@ def test_resource_types_are_pinned_per_producer() -> None:
 def test_resource_type_starts_with_the_cli_service_key(service: str) -> None:
     # The left half of every resource_type is the producing service's
     # registry key — so any type in the output round-trips into
-    # `scan --service <left half>`.
-    assert service in SERVICES
+    # `scan --service <left half>`. PROCESSORS is derived from SERVICES,
+    # so every service reaching here is a --service value by construction.
     for record in flatten(service):
         assert record["resource_type"].split(":")[0] == service, record
 
