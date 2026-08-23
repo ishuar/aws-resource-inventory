@@ -177,13 +177,20 @@ def _extract_resource_id_from_arn(arn: str, resource_type: str) -> str | None:
     return None
 
 
-def should_use_resource_groups_api(tag_key: str | None, tag_value: str | None) -> bool:
-    """
-    Determine if Resource Groups Tagging API should be used.
+def should_use_resource_groups_api(
+    tag_key: str | None,
+    tag_value: str | None,
+    all_services: bool = False,
+) -> bool:
+    """Whether this scan takes the Resource Groups Tagging API path.
 
-    Returns True if either tag_key OR tag_value is provided (prioritize Resource Groups API).
+    The single definition of that choice. It selects which scanner runs and,
+    via ``output_results(source=...)``, how the results are flattened — those
+    two must never be able to disagree, which is why the expression lives
+    here rather than being restated at each call site. A new way of entering
+    the tag path belongs in this function and nowhere else.
     """
-    return bool(tag_key or tag_value)
+    return bool(all_services or tag_key or tag_value)
 
 
 # Sections of the hybrid tag-scan results that carry raw service-shaped
