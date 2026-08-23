@@ -9,23 +9,15 @@ every record states whether its ARN was observed or constructed. Any
 change to the shape is a deliberate decision, not an accident.
 """
 
-from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 from aws_resource_inventory.lib.outputs import process_generic_service_output
 from aws_resource_inventory.lib.records import CallerIdentity, Resource
-from aws_resource_inventory.services.autoscaling_service import (
-    process_autoscaling_output,
-)
 from aws_resource_inventory.services.ec2_service import process_ec2_output
-from aws_resource_inventory.services.ecs_service import process_ecs_output
-from aws_resource_inventory.services.efs_service import process_efs_output
 from aws_resource_inventory.services.elb_service import process_elb_output
-from aws_resource_inventory.services.rds_service import process_rds_output
-from aws_resource_inventory.services.registry import SERVICES
-from aws_resource_inventory.services.s3_service import process_s3_output
+from aws_resource_inventory.services.registry import SERVICES, ProcessOutputFunc
 from aws_resource_inventory.services.vpc_service import process_vpc_output
 
 REGION = "eu-central-1"
@@ -167,15 +159,11 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
     },
 }
 
-PROCESSORS: dict[str, Callable[..., None]] = {
-    "ec2": process_ec2_output,
-    "s3": process_s3_output,
-    "rds": process_rds_output,
-    "vpc": process_vpc_output,
-    "elb": process_elb_output,
-    "ecs": process_ecs_output,
-    "efs": process_efs_output,
-    "autoscaling": process_autoscaling_output,
+# Derived from the registry, never hand-listed: a service registered in
+# SERVICES without a fixture here fails loudly instead of quietly
+# escaping the contract every test below parametrizes over.
+PROCESSORS: dict[str, ProcessOutputFunc] = {
+    name: registration.process_output for name, registration in SERVICES.items()
 }
 
 
@@ -514,6 +502,31 @@ def test_same_resource_yields_the_same_identity_via_both_scan_paths() -> None:
     assert tagging_side, "tagging path produced no records"
     for resource in tagging_side:
         assert (resource.resource_id, resource.resource_arn) in service_side, resource
+
+
+def test_tagging_path_types_keep_the_aws_native_prefix() -> None:
+    # Counterpart to test_resource_type_starts_with_the_cli_service_key:
+    # the tagging path passes AWS's own ARN-derived ResourceType through,
+    # so its left half is NOT a --service key. Pinned because
+    # Resource.service is shared by both paths (ADR-0005 Consequences).
+    resources: list[Resource] = []
+    process_generic_service_output(
+        {
+            "functions": [
+                {
+                    "ResourceARN": "arn:aws:lambda:eu-central-1:1:function:fn",
+                    "ResourceType": "lambda:function",
+                }
+            ]
+        },
+        REGION,
+        resources,
+        IDENTITY,
+    )
+
+    (function,) = resources
+    assert function.service == "lambda"
+    assert function.service not in SERVICES
 
 
 def test_generic_processor_flattens_resource_groups_records() -> None:
