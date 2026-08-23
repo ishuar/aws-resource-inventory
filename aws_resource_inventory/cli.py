@@ -36,11 +36,14 @@ from aws_resource_inventory.lib.logging import (
     create_debug_log_file,
     get_output_console,
 )
-
-# Import core scanning functionality
 from aws_resource_inventory.lib.outputs import (
     TABLE_MINIMUM_WIDTH,
     output_results,
+)
+
+# Import core scanning functionality
+from aws_resource_inventory.lib.resource_groups_utils import (
+    should_use_resource_groups_api,
 )
 
 # Import core business logic functions
@@ -570,7 +573,9 @@ def scan_command(
             # The caller knows which scan path produced the results:
             # tags or --all-services switch to the Resource Groups path.
             scan_source: Literal["services", "tagging"] = (
-                "tagging" if (all_services or tag_key or tag_value) else "services"
+                "tagging"
+                if should_use_resource_groups_api(tag_key, tag_value, all_services)
+                else "services"
             )
             resource_count = output_results(
                 all_results,
@@ -618,7 +623,9 @@ def _display_configuration_panel(
     config_table.add_column("Value", style="yellow", width=60, highlight=True)
 
     # Auto-detect scanning mode for display
-    use_resource_groups_api = all_services or (tag_key or tag_value)
+    use_resource_groups_api = should_use_resource_groups_api(
+        tag_key, tag_value, all_services
+    )
 
     if use_resource_groups_api:
         if all_services:
@@ -825,7 +832,9 @@ def _display_scan_start_message(
         )
     else:
         # More descriptive message based on scan type
-        use_resource_groups_api = all_services or (tag_key or tag_value)
+        use_resource_groups_api = should_use_resource_groups_api(
+            tag_key, tag_value, all_services
+        )
         if use_resource_groups_api:
             if all_services:
                 console.print(
@@ -901,7 +910,7 @@ def _check_cache_availability(
     from aws_resource_inventory.lib.cache import get_cached_result
 
     for region in region_list:
-        if all_services or (tag_key or tag_value):
+        if should_use_resource_groups_api(tag_key, tag_value, all_services):
             # Check cross-service cache
             cached_result = get_cached_result(
                 region, "all_services", tag_key, tag_value

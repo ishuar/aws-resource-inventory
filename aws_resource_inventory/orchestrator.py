@@ -29,6 +29,9 @@ from rich.table import Table
 # Import logging (using simplified logging)
 from aws_resource_inventory.lib.logging import get_logger
 from aws_resource_inventory.lib.outputs import TABLE_MINIMUM_WIDTH
+from aws_resource_inventory.lib.resource_groups_utils import (
+    should_use_resource_groups_api,
+)
 
 # Import modular components
 from aws_resource_inventory.lib.scan import scan_region
@@ -178,7 +181,7 @@ def check_and_display_cache_status(
     cached_items = []
 
     for region in region_list:
-        if all_services or (tag_key or tag_value):
+        if should_use_resource_groups_api(tag_key, tag_value, all_services):
             # Check cross-service cache
             cached_result = get_cached_result(
                 region, "all_services", tag_key, tag_value
@@ -345,7 +348,9 @@ def perform_scan(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit region scanning tasks with progress callbacks
         # Auto-detect scanning mode: Use Resource Groups API when tags are provided OR --all-services is used
-        use_resource_groups_api = all_services or (tag_key or tag_value)
+        use_resource_groups_api = should_use_resource_groups_api(
+            tag_key, tag_value, all_services
+        )
 
         if use_resource_groups_api:
             # Use Resource Groups API for cross-service scanning (when tags provided or --all-services)
