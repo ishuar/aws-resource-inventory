@@ -57,9 +57,10 @@ class Resource:
 
     @property
     def service(self) -> str:
-        """The AWS service prefix of resource_type ("ec2:instance" -> "ec2").
+        """The CLI service key prefix of resource_type ("ec2:instance" -> "ec2").
 
-        Bare legacy types without a colon (e.g. "vpc") are their own service.
+        Every producer emits ``<service key>:<AWS type>``, so this always
+        round-trips into ``scan --service``.
         """
         return self.resource_type.split(":", 1)[0]
 

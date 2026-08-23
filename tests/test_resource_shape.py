@@ -24,6 +24,7 @@ from aws_resource_inventory.services.ecs_service import process_ecs_output
 from aws_resource_inventory.services.efs_service import process_efs_output
 from aws_resource_inventory.services.elb_service import process_elb_output
 from aws_resource_inventory.services.rds_service import process_rds_output
+from aws_resource_inventory.services.registry import SERVICES
 from aws_resource_inventory.services.s3_service import process_s3_output
 from aws_resource_inventory.services.vpc_service import process_vpc_output
 
@@ -230,9 +231,7 @@ def test_resource_types_are_pinned_per_producer() -> None:
             "ec2:volume",
         ],
         "s3": ["s3:bucket"],
-        # Characterization: bare "vpc" (no colon) for VPCs is current behaviour.
         "vpc": [
-            "vpc",
             "vpc:dhcp_options",
             "vpc:endpoint",
             "vpc:internet_gateway",
@@ -240,12 +239,13 @@ def test_resource_types_are_pinned_per_producer() -> None:
             "vpc:peering_connection",
             "vpc:route_table",
             "vpc:subnet",
+            "vpc:vpc",
         ],
         "elb": [
-            "elbv2:listener",
-            "elbv2:listener_rule",
-            "elbv2:load_balancer_application",
-            "elbv2:target_group",
+            "elb:listener",
+            "elb:listener_rule",
+            "elb:load_balancer_application",
+            "elb:target_group",
         ],
         "ecs": [
             "ecs:capacity_provider",
@@ -268,6 +268,45 @@ def test_resource_types_are_pinned_per_producer() -> None:
     }
 
 
+@pytest.mark.parametrize("service", sorted(PROCESSORS))
+def test_resource_type_starts_with_the_cli_service_key(service: str) -> None:
+    # The left half of every resource_type is the producing service's
+    # registry key — so any type in the output round-trips into
+    # `scan --service <left half>`.
+    assert service in SERVICES
+    for record in flatten(service):
+        assert record["resource_type"].split(":")[0] == service, record
+
+
+def test_load_balancer_flavour_comes_from_aws_type_attribute() -> None:
+    # ALB/NLB/GWLB stay distinct via AWS's own Type attribute — no
+    # hardcoded enum, so new flavours (e.g. "gateway") work unchanged.
+    resources: list[Resource] = []
+    process_elb_output(
+        {
+            "load_balancers": [
+                {
+                    "LoadBalancerName": "my-gwlb",
+                    "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:1:loadbalancer/gwy/my-gwlb/xyz",
+                    "Type": "gateway",
+                },
+                {
+                    # No Type in the response: the flavourless base type,
+                    # never an invented suffix.
+                    "LoadBalancerName": "no-type",
+                    "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:1:loadbalancer/app/no-type/abc",
+                },
+            ]
+        },
+        REGION,
+        resources,
+        IDENTITY,
+    )
+    gwlb, untyped = resources
+    assert gwlb.resource_type == "elb:load_balancer_gateway"
+    assert untyped.resource_type == "elb:load_balancer"
+
+
 def test_arn_source_is_pinned_per_producer() -> None:
     # Which ARNs come from the AWS API (observed) and which this tool
     # builds from the caller identity (constructed) is part of the
@@ -285,7 +324,7 @@ def test_arn_source_is_pinned_per_producer() -> None:
         # s3: ListBuckets returns no ARN; built from the documented format.
         "s3:bucket": "constructed",
         # vpc: only describe_subnets returns an ARN.
-        "vpc": "constructed",
+        "vpc:vpc": "constructed",
         "vpc:subnet": "observed",
         "vpc:nat_gateway": "constructed",
         "vpc:internet_gateway": "constructed",
@@ -294,10 +333,10 @@ def test_arn_source_is_pinned_per_producer() -> None:
         "vpc:peering_connection": "constructed",
         "vpc:endpoint": "constructed",
         # elb/ecs/efs/rds: every ARN comes straight from the API.
-        "elbv2:load_balancer_application": "observed",
-        "elbv2:listener": "observed",
-        "elbv2:listener_rule": "observed",
-        "elbv2:target_group": "observed",
+        "elb:load_balancer_application": "observed",
+        "elb:listener": "observed",
+        "elb:listener_rule": "observed",
+        "elb:target_group": "observed",
         "ecs:cluster": "observed",
         "ecs:service": "observed",
         "ecs:task_definition": "observed",
@@ -334,7 +373,7 @@ def test_constructed_arns_follow_the_documented_formats() -> None:
 
     vpc = {r["resource_type"]: r["resource_arn"] for r in flatten("vpc")}
     assert vpc == {
-        "vpc": "arn:aws:ec2:eu-central-1:111122223333:vpc/vpc-1",
+        "vpc:vpc": "arn:aws:ec2:eu-central-1:111122223333:vpc/vpc-1",
         "vpc:subnet": "arn:aws:ec2:eu-central-1:111122223333:subnet/subnet-1",
         "vpc:nat_gateway": "arn:aws:ec2:eu-central-1:111122223333:natgateway/nat-1",
         "vpc:internet_gateway": "arn:aws:ec2:eu-central-1:111122223333:internet-gateway/igw-1",
@@ -384,16 +423,15 @@ def test_identity_fields_per_producer() -> None:
     assert s3_record["resource_id"] == "my-bucket"
     assert s3_record["resource_arn"] == "arn:aws:s3:::my-bucket"
 
-    # elbv2 ids are extracted from the observed ARN and keep the full
+    # ELBv2 ids are extracted from the observed ARN and keep the full
     # path after the resource-type segment — AWS's own id shape.
     elb_records = {r["resource_type"]: r for r in flatten("elb")}
     assert (
-        elb_records["elbv2:load_balancer_application"]["resource_id"]
-        == "app/my-alb/abc"
+        elb_records["elb:load_balancer_application"]["resource_id"] == "app/my-alb/abc"
     )
-    assert elb_records["elbv2:listener"]["resource_id"] == "app/my-alb/abc/ghi"
-    assert elb_records["elbv2:listener_rule"]["resource_id"] == "app/my-alb/abc/ghi/jkl"
-    assert elb_records["elbv2:target_group"]["resource_id"] == "my-tg/def"
+    assert elb_records["elb:listener"]["resource_id"] == "app/my-alb/abc/ghi"
+    assert elb_records["elb:listener_rule"]["resource_id"] == "app/my-alb/abc/ghi/jkl"
+    assert elb_records["elb:target_group"]["resource_id"] == "my-tg/def"
 
     ecs_records = {r["resource_type"]: r for r in flatten("ecs")}
     assert ecs_records["ecs:task_definition"]["resource_id"] == "api:3"

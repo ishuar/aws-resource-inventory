@@ -90,8 +90,7 @@ def test_name_defaults_to_absent() -> None:
 
 def test_service_is_derived_from_the_resource_type_prefix() -> None:
     assert make(resource_type="ec2:instance").service == "ec2"
-    # Bare types without a colon (the legacy "vpc" form) are their own service.
-    assert make(resource_type="vpc").service == "vpc"
+    assert make(resource_type="vpc:vpc").service == "vpc"
 
 
 class TestCallerIdentity:

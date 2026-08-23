@@ -72,7 +72,7 @@ def process_vpc_output(
     for vpc in service_data.get("vpcs", []):
         vpc_id = vpc.get("VpcId")
         if not vpc_id:
-            skip_missing_id("vpc")
+            skip_missing_id("vpc:vpc")
             continue
         cidr_block = vpc.get("CidrBlock", "N/A")
 
@@ -80,7 +80,7 @@ def process_vpc_output(
             Resource(
                 region=region,
                 resource_name=f"VPC-{cidr_block}",
-                resource_type="vpc",
+                resource_type="vpc:vpc",
                 resource_id=vpc_id,
                 resource_arn=constructed_arn("vpc", vpc_id),
                 arn_source="constructed",
