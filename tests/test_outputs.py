@@ -1,19 +1,22 @@
 """
-Output seam: aws_resource_inventory.lib.outputs.output_results and the markdown report.
+Output seam: aws_resource_inventory.lib.outputs.output_results.
 
-output_results is the single funnel from nested scan results to files on
-disk. These tests pin: format routing, which files get written, the return
-value, and how results from the two scan paths (traditional vs Resource
-Groups API) are routed to processors.
+output_results is the single funnel from nested scan results to the JSON
+envelope (a file, or stdout when output_file is None — the CLI's
+--output -). These tests pin: what gets written where, the return value,
+and how results from the two scan paths (traditional vs Resource Groups
+API) are routed to processors.
 """
 
 import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from aws_resource_inventory.lib.envelope import ScanFilters
-from aws_resource_inventory.lib.outputs import generate_markdown_summary, output_results
-from aws_resource_inventory.lib.records import CallerIdentity, Resource
+from aws_resource_inventory.lib.outputs import output_results
+from aws_resource_inventory.lib.records import CallerIdentity
 
 REGION = "eu-central-1"
 IDENTITY = CallerIdentity(account="111122223333", partition="aws")
@@ -60,14 +63,13 @@ def resource_groups_results() -> dict[str, Any]:
 
 
 class TestOutputResults:
-    def test_json_writes_the_envelope_and_returns_the_count(
+    def test_scan_writes_the_envelope_and_returns_the_count(
         self, tmp_path: Path
     ) -> None:
         out = tmp_path / "scan.json"
         count = output_results(
             traditional_results(),
             out,
-            "json",
             debug=False,
             identity=IDENTITY,
             source="services",
@@ -90,29 +92,15 @@ class TestOutputResults:
         assert len(resources) == 3
         assert {r["type"] for r in resources} == {"s3:bucket", "ec2:instance"}
 
-    def test_table_format_still_writes_the_json_file(self, tmp_path: Path) -> None:
-        out = tmp_path / "scan.json"
-        count = output_results(
-            traditional_results(),
-            out,
-            "table",
-            debug=False,
-            identity=IDENTITY,
-            source="services",
-            **ENVELOPE_KWARGS,
-        )
-
-        assert count == 3
-        assert len(json.loads(out.read_text())["resources"]) == 3
-
-    def test_markdown_format_writes_a_md_file_with_the_md_suffix(
-        self, tmp_path: Path
+    def test_stdout_mode_prints_only_the_envelope_and_touches_no_disk(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: Any
     ) -> None:
-        out = tmp_path / "scan.json"
+        # output_file=None is --output -: the document goes to stdout,
+        # nothing is written anywhere on disk.
+        monkeypatch.chdir(tmp_path)
         count = output_results(
             traditional_results(),
-            out,
-            "md",
+            None,
             debug=False,
             identity=IDENTITY,
             source="services",
@@ -120,49 +108,18 @@ class TestOutputResults:
         )
 
         assert count == 3
-        md_file = tmp_path / "scan.md"
-        assert md_file.exists()
-        assert "# AWS Resources Scan Report" in md_file.read_text()
-
-    def test_markdown_alias_behaves_like_md(self, tmp_path: Path) -> None:
-        out = tmp_path / "scan.json"
-        output_results(
-            traditional_results(),
-            out,
-            "markdown",
-            debug=False,
-            identity=IDENTITY,
-            source="services",
-            **ENVELOPE_KWARGS,
-        )
-        assert (tmp_path / "scan.md").exists()
-
-    def test_unknown_format_writes_nothing_but_still_returns_the_count(
-        self, tmp_path: Path
-    ) -> None:
-        # Characterization: an unknown format is reported on the console
-        # only — no file, no exception, count still returned. (A future
-        # change may make this a hard error; that would be an improvement.)
-        out = tmp_path / "scan.json"
-        count = output_results(
-            traditional_results(),
-            out,
-            "yaml",
-            debug=False,
-            identity=IDENTITY,
-            source="services",
-            **ENVELOPE_KWARGS,
-        )
-
-        assert count == 3
-        assert not out.exists()
+        captured = capsys.readouterr()
+        # The whole stream must parse — any decoration would break jq.
+        envelope = json.loads(captured.out)
+        assert envelope["schema_version"] == 1
+        assert len(envelope["resources"]) == 3
+        assert list(tmp_path.iterdir()) == []
 
     def test_missing_output_directory_is_created(self, tmp_path: Path) -> None:
         out = tmp_path / "deeply" / "nested" / "scan.json"
         output_results(
             traditional_results(),
             out,
-            "json",
             debug=False,
             identity=IDENTITY,
             source="services",
@@ -177,7 +134,6 @@ class TestOutputResults:
         count = output_results(
             {},
             out,
-            "json",
             debug=False,
             identity=IDENTITY,
             source="services",
@@ -200,7 +156,6 @@ class TestOutputResults:
         count = output_results(
             {REGION: {"ec2": {}}},
             out,
-            "json",
             debug=False,
             identity=IDENTITY,
             source="services",
@@ -217,7 +172,6 @@ class TestOutputResults:
         count = output_results(
             resource_groups_results(),
             out,
-            "json",
             debug=False,
             identity=IDENTITY,
             source="tagging",
@@ -253,7 +207,6 @@ class TestOutputResults:
         count = output_results(
             results,
             out,
-            "json",
             debug=False,
             identity=IDENTITY,
             source="tagging",
@@ -272,7 +225,6 @@ class TestOutputResults:
         count = output_results(
             results,
             out,
-            "json",
             debug=False,
             identity=IDENTITY,
             source="services",
@@ -322,7 +274,6 @@ class TestTaggingPathHybridResults:
         count = output_results(
             results,
             out,
-            "json",
             debug=False,
             identity=IDENTITY,
             source="tagging",
@@ -338,58 +289,3 @@ class TestTaggingPathHybridResults:
         lt = records["autoscaling:launch-template"]
         assert lt["id"] == "lt-1"
         assert lt["name"] == "web-lt"
-
-
-class TestMarkdownSummary:
-    def test_report_counts_by_region_service_and_type(self) -> None:
-        flattened = [
-            Resource(
-                region=REGION,
-                resource_type="s3:bucket",
-                resource_id="bucket-a",
-                resource_arn="arn:aws:s3:::bucket-a",
-                arn_source="constructed",
-            ),
-            Resource(
-                region="us-east-1",
-                resource_type="ec2:instance",
-                resource_id="i-1",
-                resource_arn="arn:aws:ec2:us-east-1:111122223333:instance/i-1",
-                arn_source="constructed",
-            ),
-        ]
-        report = generate_markdown_summary(flattened, {})
-
-        assert "**Total Resources:** 2" in report
-        assert f"- **{REGION}**: 1 resources" in report
-        assert "- **us-east-1**: 1 resources" in report
-        assert "- **S3**: 1 resources" in report
-        assert "- **EC2**: 1 resources" in report
-        assert "- **s3:bucket**: 1" in report
-
-    def test_missing_resource_name_falls_back_to_the_id(self) -> None:
-        flattened = [
-            Resource(
-                region=REGION,
-                resource_type="ecs:cluster",
-                resource_id="prod-cluster",
-                resource_arn="arn:aws:ecs:eu-central-1:1:cluster/prod-cluster",
-                arn_source="observed",
-            )
-        ]
-        report = generate_markdown_summary(flattened, {})
-        assert "| prod-cluster |" in report
-
-    def test_pipes_in_values_are_escaped_so_tables_stay_valid(self) -> None:
-        flattened = [
-            Resource(
-                region=REGION,
-                resource_name="name|with|pipes",
-                resource_type="s3:bucket",
-                resource_id="name|with|pipes",
-                resource_arn="arn:aws:s3:::name|with|pipes",
-                arn_source="constructed",
-            )
-        ]
-        report = generate_markdown_summary(flattened, {})
-        assert "name\\|with\\|pipes" in report

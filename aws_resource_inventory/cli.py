@@ -30,6 +30,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
+import aws_resource_inventory.lib.outputs as outputs_module
+import aws_resource_inventory.orchestrator as orchestrator_module
 from aws_resource_inventory.lib.envelope import ScanFilters
 
 # Import logging configuration
@@ -115,7 +117,7 @@ def main(
     • Cross-region resource discovery
     • Tag-based filtering with Resource Groups API
     • Intelligent caching system (10-minute TTL)
-    • Multiple output formats (JSON, Table, Markdown)
+    • Terminal table plus a JSON results document (--output - for stdout)
     • Real-time progress tracking
     • Graceful interrupt handling
     • AWS credential validation
@@ -155,10 +157,11 @@ def scan_command(
         None,
         "--output",
         "-o",
-        help="Output file path. If not provided, a dynamic name will be generated.",
-    ),
-    output_format: str = typer.Option(
-        "table", "--format", "-f", help="Output format (json|table|md|markdown)"
+        help=(
+            "Path for the JSON results document. '-' writes it to stdout and "
+            "suppresses all other output (pipes cleanly into jq). "
+            "If not provided, a dynamic name will be generated."
+        ),
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be scanned without executing"
@@ -208,11 +211,26 @@ def scan_command(
     Scan multiple AWS services across regions with optional tag filtering. Use the 'scan' command to start scanning AWS resources.
     """
 
+    # --output -: stdout carries only the JSON document. This must be
+    # decided before logging is configured — configure_logging emits the
+    # debug banner through the console it builds, so a console chosen
+    # afterwards is already too late to keep the pipe clean.
+    # A dry run produces no document — its whole point is the printed
+    # plan — so it stays loud on stdout.
+    to_stdout = output_file is not None and str(output_file) == "-"
+    stdout_is_the_document = to_stdout and not dry_run
+
     # Configure AWS scanner logging system
     debug_log_file = create_debug_log_file(app_log_file) if debug else None
     logger = configure_logging(
-        debug=debug, log_file=debug_log_file, verbose=app_verbose
+        debug=debug,
+        log_file=debug_log_file,
+        verbose=app_verbose,
+        log_to_stderr=stdout_is_the_document,
     )
+
+    if stdout_is_the_document:
+        _silence_decorative_output()
 
     if debug:
         logger.info("Debug mode enabled - verbose logging activated")
@@ -229,7 +247,6 @@ def scan_command(
             logger.debug("  • tag_key: %s", tag_key)
             logger.debug("  • tag_value: %s", tag_value)
             logger.debug("  • output_file: %s", output_file)
-            logger.debug("  • output_format: %s", output_format)
             logger.debug("  • max_workers: %s", max_workers)
             logger.debug("  • service_workers: %s", service_workers)
             logger.debug("  • use_cache: %s", use_cache)
@@ -306,7 +323,6 @@ def scan_command(
         use_cache,
         refresh,
         refresh_interval,
-        output_format,
         aws_profile,
         debug,
     )
@@ -388,7 +404,6 @@ def scan_command(
             max_workers,
             service_workers,
             use_cache,
-            output_format,
             output_file,
         )
         return
@@ -545,8 +560,14 @@ def scan_command(
         else:
             display_region_summaries(all_results, debug)
 
-        current_output_file = _generate_output_filename(
-            output_file, tag_key, tag_value, region_list, services
+        # Stdout mode never touches the disk, so no filename exists
+        # to generate.
+        current_output_file = (
+            None
+            if to_stdout
+            else _generate_output_filename(
+                output_file, tag_key, tag_value, region_list, services
+            )
         )
 
         # Check for shutdown before processing results
@@ -576,7 +597,6 @@ def scan_command(
         resource_count = output_results(
             all_results,
             current_output_file,
-            output_format,
             debug,
             identity=caller_identity,
             source=scan_source,
@@ -602,6 +622,24 @@ def scan_command(
             break
 
 
+def _silence_decorative_output() -> None:
+    """--output -: stdout belongs to the JSON document alone.
+
+    Every decorative rich console goes quiet — banner, panels, table, and
+    the stderr progress display, which would otherwise redraw over the
+    log lines now sharing stderr. Logging itself is not touched: it was
+    pointed at stderr when it was configured, so diagnostics survive.
+    Exit codes are unaffected.
+    """
+    for decorative_console in (
+        console,
+        orchestrator_module.console,
+        outputs_module.console,
+        get_output_console(),
+    ):
+        decorative_console.quiet = True
+
+
 def _display_configuration_panel(
     all_services: bool,
     tag_key: str | None,
@@ -613,7 +651,6 @@ def _display_configuration_panel(
     use_cache: bool,
     refresh: bool,
     refresh_interval: int,
-    output_format: str,
     aws_profile: str,
     debug: bool,
 ) -> None:
@@ -662,7 +699,6 @@ def _display_configuration_panel(
     elif tag_key:
         config_table.add_row("Tag Filter", f"{tag_key}=*")
 
-    config_table.add_row("Output", output_format.upper())
     config_table.add_row("AWS Profile 👤", aws_profile)
 
     # Center the title and create a more compact panel
@@ -752,7 +788,6 @@ def _handle_dry_run(
     max_workers: int,
     service_workers: int,
     use_cache: bool,
-    output_format: str,
     output_file: Path | None,
 ) -> None:
     """Handle dry run display."""
@@ -785,9 +820,10 @@ def _handle_dry_run(
         f"  • [bold]Parallel workers:[/bold] {max_workers} regions, {service_workers} services per region"
     )
     console.print(f"  • [bold]Caching:[/bold] {'Enabled' if use_cache else 'Disabled'}")
-    console.print(f"  • [bold]Output format:[/bold] {output_format}")
 
-    if output_file:
+    if output_file and str(output_file) == "-":
+        console.print("  • [bold]Output:[/bold] JSON to stdout")
+    elif output_file:
         console.print(f"  • [bold]Output file:[/bold] {output_file}")
     else:
         console.print("  • [bold]Output file:[/bold] Auto-generated")

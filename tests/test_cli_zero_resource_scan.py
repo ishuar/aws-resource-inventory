@@ -53,8 +53,6 @@ def run_scan(output_file: Path, *extra: str) -> Any:
             "eu-central-1,eu-west-1",
             "--service",
             "s3",
-            "--format",
-            "json",
             "--no-cache",
             "--output",
             str(output_file),

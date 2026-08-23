@@ -33,12 +33,12 @@ else
     echo "   ✅ Dry run works"
 fi
 
-# Test 3: Markdown format dry run
-echo "3️⃣  Testing markdown format..."
-if ! poetry run aws-inventory scan --dry-run --regions us-east-1 --service ec2 --format md > /dev/null 2>&1 ; then
-    echo "   ❌ Markdown format failed"
+# Test 3: JSON to stdout pipes cleanly into jq (real read-only scan)
+echo "3️⃣  Testing JSON to stdout (--output - | jq)..."
+if ! poetry run aws-inventory scan --regions us-east-1 --service s3 --no-cache --output - 2>/dev/null | jq -e '.schema_version == 1' > /dev/null 2>&1 ; then
+    echo "   ❌ --output - did not produce clean JSON on stdout"
 else
-    echo "   ✅ Markdown format works"
+    echo "   ✅ --output - pipes cleanly into jq"
 fi
 
 # Test 4: Multiple services dry run
@@ -73,12 +73,12 @@ else
     echo "   ✅ Cache options work"
 fi
 
-# Test 8: Invalid format handling
+# Test 8: Error handling — --all-services without tags must be rejected
 echo "8️⃣  Testing error handling..."
-if ! poetry run aws-inventory scan --dry-run --regions us-east-1 --service ec2 --format invalid > /dev/null 2>&1 ; then
-    echo "   ❌ Error handling failed"
+if poetry run aws-inventory scan --dry-run --regions us-east-1 --all-services > /dev/null 2>&1 ; then
+    echo "   ❌ Error handling failed (--all-services without tags should exit non-zero)"
 else
-    echo "   ✅ Error handling works"
+    echo "   ✅ Error handling works (--all-services without tags is rejected)"
 fi
 
 echo ""
@@ -89,4 +89,5 @@ echo "   poetry run aws-inventory scan"
 echo ""
 echo "To test with real AWS resources:"
 echo "   poetry run aws-inventory scan --help"
-echo "   poetry run aws-inventory scan --regions us-east-1 --service ec2 --format table"
+echo "   poetry run aws-inventory scan --regions us-east-1 --service ec2"
+echo "   poetry run aws-inventory scan --regions us-east-1 --service ec2 --output - | jq '.summary'"

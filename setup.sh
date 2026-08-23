@@ -528,14 +528,9 @@ display_usage() {
     echo "  • Enable refresh mode (continuous monitoring):"
     echo "    poetry run aws-inventory scan --refresh --refresh-interval 30"
     echo
-    echo "  • Export to different formats:"
-    echo "    poetry run aws-inventory scan --format json --output results.json"
-    echo
-
-    print_message "CYAN" "🔧 Available Output Formats:"
-    echo "  • table (default) - Human-readable table format"
-    echo "  • json - JSON format for programmatic use"
-    echo "  • md - Markdown format for documentation"
+    echo "  • Choose where the JSON results document goes:"
+    echo "    poetry run aws-inventory scan --output results.json"
+    echo "    poetry run aws-inventory scan --output - | jq '.summary'"
     echo
 
     print_message "CYAN" "📁 Project Files:"

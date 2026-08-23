@@ -79,18 +79,31 @@ class AWSLogger:
         self._log_file: Path | None = None
         self._progress_console: Console | None = None
         self._is_configured = False
+        self._log_to_stderr = False
 
     def configure(
         self,
         debug: bool = False,
         log_file: Path | None = None,
         verbose: bool = False,
+        log_to_stderr: bool = False,
     ) -> None:
-        """One-method setup for all logging needs."""
-        # Always reconfigure if debug mode is requested to ensure file logging is set up
-        if self._is_configured and not debug:
+        """One-method setup for all logging needs.
+
+        ``log_to_stderr`` is for ``--output -``, where stdout carries the
+        JSON document and nothing else. Diagnostics move to stderr rather
+        than being dropped: a scan that fails still has to say why.
+        """
+        # Importing any module that calls get_logger() configures this
+        # logger with defaults, so the CLI's own call is always the
+        # second one. Reconfigure whenever a setting that shapes the
+        # handlers actually changes: debug adds the file handler,
+        # log_to_stderr moves the console. A guard that ignored its own
+        # arguments is what let --output - keep logging to stdout.
+        if self._is_configured and not debug and log_to_stderr == self._log_to_stderr:
             return
 
+        self._log_to_stderr = log_to_stderr
         self._debug_mode = debug
         self._verbose_mode = verbose
         self._log_file = log_file
@@ -105,9 +118,12 @@ class AWSLogger:
         if debug:
             install(show_locals=True)
 
-        # Console handler (stdout for regular logs - no conflicts with Live on stderr)
+        # Regular logs go to stdout so they cannot interleave with the
+        # Live progress display, which owns stderr. Under --output -
+        # stdout is reserved for the JSON document and the progress
+        # display is silenced, so stderr is free and logs move there.
         console = Console(
-            stderr=False,  # Use stdout for logging
+            stderr=log_to_stderr,
             force_terminal=True,
             legacy_windows=False,
             width=None,
@@ -412,7 +428,10 @@ _aws_logger: AWSLogger | None = None
 
 
 def configure_logging(
-    debug: bool = False, log_file: Path | None = None, verbose: bool = False
+    debug: bool = False,
+    log_file: Path | None = None,
+    verbose: bool = False,
+    log_to_stderr: bool = False,
 ) -> AWSLogger:
     """
     Configure and return the AWS scanner logging system.
@@ -421,6 +440,8 @@ def configure_logging(
         debug: Enable debug mode with verbose logging
         log_file: Optional file path for debug log output
         verbose: Enable verbose AWS API call tracing (requires debug=True)
+        log_to_stderr: Send console logs to stderr instead of stdout
+            (--output -, where stdout belongs to the JSON document)
 
     Returns:
         Configured AWSLogger instance
@@ -430,7 +451,9 @@ def configure_logging(
     if _aws_logger is None:
         _aws_logger = AWSLogger("aws-inventory")
 
-    _aws_logger.configure(debug=debug, log_file=log_file, verbose=verbose)
+    _aws_logger.configure(
+        debug=debug, log_file=log_file, verbose=verbose, log_to_stderr=log_to_stderr
+    )
     return _aws_logger
 
 

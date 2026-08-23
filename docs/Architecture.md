@@ -16,7 +16,7 @@ flowchart TD
     SVC --> ENG["aws_resource_inventory/lib/engine.py — pagination, concurrency, error policy"]
     ENG --> CL["aws_resource_inventory/lib/clients.py — the only boto3 client factory"]
     RG --> CL
-    R --> OUT["outputs.py — Resource records → terminal table / Markdown"]
+    R --> OUT["outputs.py — Resource records → terminal table"]
     T --> OUT
     OUT --> ENV["aws_resource_inventory/lib/envelope.py — build_envelope: the one serialized JSON document"]
 ```
@@ -44,7 +44,7 @@ Two paths, chosen by your flags:
 | `aws_resource_inventory/lib/records.py` | `Resource` — the typed record | Malformed records fail at construction, not at report time |
 | `aws_resource_inventory/lib/arn.py` | Extracts a resource id out of an observed ARN | The one home for ARN id extraction — both scan paths share it |
 | `aws_resource_inventory/lib/envelope.py` | `build_envelope` — Resource records → the serialized JSON document | Pure: fixtures in, dict out. The caller owns the clock and the scan parameters |
-| `aws_resource_inventory/lib/outputs.py` | Records → envelope file + terminal table / Markdown | Caller states the scan path via `source=` — never guessed |
+| `aws_resource_inventory/lib/outputs.py` | Records → the JSON envelope + the terminal table | Caller states the scan path via `source=` — never guessed |
 | `aws_resource_inventory/lib/cache.py` | Pickle cache with 10-min TTL | Best-effort: any cache failure is just a miss |
 
 ## The data shape
@@ -52,7 +52,8 @@ Two paths, chosen by your flags:
 Every scanner returns `{result_key: [raw boto3 dicts]}` (for example
 `{"vpcs": [...], "subnets": [...]}`). Output processors turn those into
 `Resource` records — region, resource_name, resource_type, resource_id,
-resource_arn, arn_source — which every output format consumes.
+resource_arn, arn_source — which both the terminal table and the
+JSON envelope consume.
 `resource_id` and `resource_arn` are always real values, never `"N/A"`:
 where AWS returns no ARN the processor constructs one from the
 `CallerIdentity` it is handed (account + partition), and `arn_source`

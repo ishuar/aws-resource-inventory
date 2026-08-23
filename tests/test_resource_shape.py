@@ -1,7 +1,8 @@
 """
 Resource shape seam: the flattened record every process_*_output emits.
 
-This is the contract every consumer (table, markdown, JSON, diff) reads:
+This is the contract every consumer (the terminal table, the JSON
+envelope) reads:
 exactly these keys, a real id and a real ARN on every record — never
 "N/A". ARNs the AWS API does not return are constructed from the caller
 identity (account + partition) using the documented per-type formats, and

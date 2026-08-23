@@ -18,9 +18,14 @@ flag more than the last.
 
 ## Where logs go
 
-1. Regular log lines go to **stdout** (rendered by rich).
+1. Regular log lines go to **stdout** (rendered by rich) — except under
+   `--output -`, where stdout carries the JSON document alone and logs
+   move to **stderr**. They are redirected, never dropped: a scan that
+   fails still says why, and `... --output - | jq` stays clean.
 2. Progress bars and the live display go to **stderr** — a separate
-   console, so logs and progress never overwrite each other.
+   console, so logs and progress never overwrite each other. Under
+   `--output -` the progress display is silenced, which is what frees
+   stderr for the log lines.
 3. In debug mode, everything also goes to a **file**:
    `.debug_logs/aws_scanner_debug_<timestamp>.log` by default, or the
    path you pass with `--log-file`. File lines carry the full caller
