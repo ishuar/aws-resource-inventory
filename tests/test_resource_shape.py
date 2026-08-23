@@ -3,9 +3,10 @@ Resource shape seam: the flattened record every process_*_output emits.
 
 This is the contract the planned typed-Resource refactor must preserve:
 consumers (table, markdown, JSON, diff) read exactly these keys. The tests
-pin the shape per producer, including today's quirks (which producers omit
-resource_name, which hardcode "N/A"), so any change to the shape is a
-deliberate decision, not an accident.
+pin the shape per producer, including today's quirks (ecs records omit
+resource_name because their resource_id is already the friendly name; some
+producers hardcode "N/A"), so any change to the shape is a deliberate
+decision, not an accident.
 """
 
 from collections.abc import Callable
@@ -238,12 +239,12 @@ def test_resource_types_are_pinned_per_producer() -> None:
 
 
 def test_resource_name_is_optional_and_that_is_load_bearing() -> None:
-    # Characterization: ec2 instances and every ecs record omit resource_name;
-    # consumers must keep falling back to resource_id. The typed-Resource
-    # refactor must model name as optional (or fill it in for these producers
-    # as a deliberate change).
+    # ec2 instances now carry their Name tag (deliberate change: the value was
+    # already computed and discarded). ecs records still omit resource_name —
+    # their resource_id is already the friendly name, so consumers must keep
+    # falling back to resource_id and the field stays optional on Resource.
     ec2_records = {r["resource_type"]: r for r in flatten("ec2")}
-    assert "resource_name" not in ec2_records["ec2:instance"]
+    assert ec2_records["ec2:instance"]["resource_name"] == "web"
     assert ec2_records["ec2:volume"]["resource_name"] == "vol-1"
 
     assert all("resource_name" not in r for r in flatten("ecs"))
@@ -305,3 +306,15 @@ def test_generic_processor_flattens_resource_groups_records() -> None:
             "resource_arn": "arn:aws:lambda:eu-central-1:1:function:fn",
         },
     ]
+
+
+def test_ec2_instance_name_falls_back_to_the_instance_id() -> None:
+    """An instance with no Name tag still reports a usable name.
+
+    The reports render resource_name, so an untagged instance must show its
+    id rather than an empty cell.
+    """
+    records: list[Resource] = []
+    process_ec2_output({"instances": [{"InstanceId": "i-untagged"}]}, REGION, records)
+
+    assert [r.to_record()["resource_name"] for r in records] == ["i-untagged"]

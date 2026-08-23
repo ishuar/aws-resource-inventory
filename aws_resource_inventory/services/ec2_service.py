@@ -64,6 +64,7 @@ def process_ec2_output(
         flattened_resources.append(
             Resource(
                 region=region,
+                resource_name=instance_name,
                 resource_type="ec2:instance",  # Unified format: service:type
                 resource_id=instance_id,
                 resource_arn="N/A",  # Instances don't have ARNs in AWS API
