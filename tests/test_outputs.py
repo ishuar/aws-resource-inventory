@@ -11,11 +11,23 @@ import json
 from pathlib import Path
 from typing import Any
 
+from aws_resource_inventory.lib.envelope import ScanFilters
 from aws_resource_inventory.lib.outputs import generate_markdown_summary, output_results
 from aws_resource_inventory.lib.records import CallerIdentity, Resource
 
 REGION = "eu-central-1"
 IDENTITY = CallerIdentity(account="111122223333", partition="aws")
+FILTERS = ScanFilters(
+    services=["ec2", "s3"], tag_key=None, tag_value=None, all_services=False
+)
+# The scan block the CLI would supply — fixed values, so tests stay
+# deterministic; the envelope's own schema is pinned in test_envelope.py.
+ENVELOPE_KWARGS: dict[str, Any] = {
+    "regions": [REGION],
+    "filters": FILTERS,
+    "started_at": "2026-08-23T09:14:22Z",
+    "duration_seconds": 1.5,
+}
 
 
 def traditional_results() -> dict[str, Any]:
@@ -48,7 +60,7 @@ def resource_groups_results() -> dict[str, Any]:
 
 
 class TestOutputResults:
-    def test_json_writes_the_flattened_list_and_returns_the_count(
+    def test_json_writes_the_envelope_and_returns_the_count(
         self, tmp_path: Path
     ) -> None:
         out = tmp_path / "scan.json"
@@ -59,12 +71,24 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            **ENVELOPE_KWARGS,
         )
 
         assert count == 3
         written = json.loads(out.read_text())
-        assert len(written) == 3
-        assert {r["resource_type"] for r in written} == {"s3:bucket", "ec2:instance"}
+        # The file is the envelope document, never a bare array; the
+        # scan block carries exactly what the caller supplied.
+        assert written["schema_version"] == 1
+        assert written["scan"]["account"] == IDENTITY.account
+        assert written["scan"]["source"] == "services"
+        assert written["scan"]["regions"] == [REGION]
+        assert written["scan"]["started_at"] == "2026-08-23T09:14:22Z"
+        assert written["scan"]["duration_seconds"] == 1.5
+        assert written["scan"]["filters"]["services"] == ["ec2", "s3"]
+        assert written["summary"]["total"] == 3
+        resources = written["resources"]
+        assert len(resources) == 3
+        assert {r["type"] for r in resources} == {"s3:bucket", "ec2:instance"}
 
     def test_table_format_still_writes_the_json_file(self, tmp_path: Path) -> None:
         out = tmp_path / "scan.json"
@@ -75,10 +99,11 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            **ENVELOPE_KWARGS,
         )
 
         assert count == 3
-        assert json.loads(out.read_text())
+        assert len(json.loads(out.read_text())["resources"]) == 3
 
     def test_markdown_format_writes_a_md_file_with_the_md_suffix(
         self, tmp_path: Path
@@ -91,6 +116,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            **ENVELOPE_KWARGS,
         )
 
         assert count == 3
@@ -107,6 +133,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            **ENVELOPE_KWARGS,
         )
         assert (tmp_path / "scan.md").exists()
 
@@ -124,6 +151,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            **ENVELOPE_KWARGS,
         )
 
         assert count == 3
@@ -138,17 +166,28 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            **ENVELOPE_KWARGS,
         )
         assert out.exists()
 
-    def test_empty_results_produce_an_empty_file_and_zero(self, tmp_path: Path) -> None:
+    def test_empty_results_produce_an_empty_envelope_and_zero(
+        self, tmp_path: Path
+    ) -> None:
         out = tmp_path / "scan.json"
         count = output_results(
-            {}, out, "json", debug=False, identity=IDENTITY, source="services"
+            {},
+            out,
+            "json",
+            debug=False,
+            identity=IDENTITY,
+            source="services",
+            **ENVELOPE_KWARGS,
         )
 
         assert count == 0
-        assert json.loads(out.read_text()) == []
+        written = json.loads(out.read_text())
+        assert written["resources"] == []
+        assert written["summary"] == {"total": 0, "by_region": {}, "by_type": {}}
 
     def test_empty_service_data_is_skipped(self, tmp_path: Path) -> None:
         out = tmp_path / "scan.json"
@@ -159,6 +198,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            **ENVELOPE_KWARGS,
         )
         assert count == 0
 
@@ -175,12 +215,13 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="tagging",
+            **ENVELOPE_KWARGS,
         )
 
         assert count == 1
-        written = json.loads(out.read_text())
-        assert written[0]["resource_type"] == "lambda:function"
-        assert written[0]["resource_id"] == "fn"
+        (record,) = json.loads(out.read_text())["resources"]
+        assert record["type"] == "lambda:function"
+        assert record["id"] == "fn"
 
     def test_tagging_source_bypasses_service_processors_even_for_known_names(
         self, tmp_path: Path
@@ -204,12 +245,18 @@ class TestOutputResults:
         }
         out = tmp_path / "scan.json"
         count = output_results(
-            results, out, "json", debug=False, identity=IDENTITY, source="tagging"
+            results,
+            out,
+            "json",
+            debug=False,
+            identity=IDENTITY,
+            source="tagging",
+            **ENVELOPE_KWARGS,
         )
 
         assert count == 1
-        record = json.loads(out.read_text())[0]
-        assert record["resource_arn"] == "arn:aws:ec2:eu-central-1:1:instance/i-7"
+        (record,) = json.loads(out.read_text())["resources"]
+        assert record["arn"] == "arn:aws:ec2:eu-central-1:1:instance/i-7"
 
     def test_unknown_traditional_service_falls_back_to_generic(
         self, tmp_path: Path
@@ -217,13 +264,19 @@ class TestOutputResults:
         results = {REGION: {"unknownsvc": {"things": [{"SomeKey": "some-value"}]}}}
         out = tmp_path / "scan.json"
         count = output_results(
-            results, out, "json", debug=False, identity=IDENTITY, source="services"
+            results,
+            out,
+            "json",
+            debug=False,
+            identity=IDENTITY,
+            source="services",
+            **ENVELOPE_KWARGS,
         )
 
         # Nothing identifiable (no ARN, no id): the record is skipped with
         # a log line — "N/A" identities are banned output.
         assert count == 0
-        assert json.loads(out.read_text()) == []
+        assert json.loads(out.read_text())["resources"] == []
 
 
 class TestTaggingPathHybridResults:
@@ -261,18 +314,24 @@ class TestTaggingPathHybridResults:
         }
         out = tmp_path / "scan.json"
         count = output_results(
-            results, out, "json", debug=False, identity=IDENTITY, source="tagging"
+            results,
+            out,
+            "json",
+            debug=False,
+            identity=IDENTITY,
+            source="tagging",
+            **ENVELOPE_KWARGS,
         )
 
         assert count == 3
-        records = {r["resource_type"]: r for r in json.loads(out.read_text())}
-        assert records["s3:bucket"]["resource_id"] == "tagged-bucket"
+        records = {r["type"]: r for r in json.loads(out.read_text())["resources"]}
+        assert records["s3:bucket"]["id"] == "tagged-bucket"
         asg = records["autoscaling:autoScalingGroup"]
-        assert asg["resource_id"] == "web-asg"
-        assert asg["resource_arn"] == "arn:aws:autoscaling:eu-central-1:1:asg/web-asg"
+        assert asg["id"] == "web-asg"
+        assert asg["arn"] == "arn:aws:autoscaling:eu-central-1:1:asg/web-asg"
         lt = records["autoscaling:launch-template"]
-        assert lt["resource_id"] == "lt-1"
-        assert lt["resource_name"] == "web-lt"
+        assert lt["id"] == "lt-1"
+        assert lt["name"] == "web-lt"
 
 
 class TestMarkdownSummary:

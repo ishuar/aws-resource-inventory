@@ -62,8 +62,7 @@ the `Name` tag) or null — never synthesized, never a copy of the id. The
 producer with tags to read and by the tag-scan processor, so the same
 `Name` tag yields the same name on either scan path. A name taken from a
 name *attribute* is service-path only: the Tagging API returns an ARN
-and tags, never the attribute (ADR-0005 Consequences). `to_record()`
-does not serialize `arn_source` yet.
+and tags, never the attribute (ADR-0005 Consequences).
 
 One subtlety: tag-path results are a hybrid. Most sections are Tagging
 API shaped, but the merged Auto Scaling section carries raw service

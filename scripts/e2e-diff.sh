@@ -3,9 +3,11 @@
 # e2e-diff.sh — end-to-end functional comparison of two revisions.
 #
 # Runs the same real AWS scan on two git refs (e.g. before and after a
-# merge) and diffs the JSON output. The JSON contains no timestamps, so
-# with unchanged infrastructure the outputs of functionally identical
-# code are byte-identical after sorting.
+# merge) and diffs the JSON output. The envelope's scan block carries
+# started_at/duration_seconds, which differ between any two runs by
+# design — so only .resources is compared: with unchanged infrastructure
+# the resource arrays of functionally identical code are byte-identical
+# after sorting.
 #
 # PREREQUISITES
 #   1. Valid AWS credentials for a profile with read-only access
@@ -126,6 +128,17 @@ run_scan() { # $1 = worktree, $2 = output file
      ADR-0004 package layout cannot be compared; the venv's editable
      install would silently substitute the current checkout's code."
 
+  # Same refusal mechanism for the JSON envelope: refs from before the
+  # envelope (aws_resource_inventory/lib/envelope.py, ADR-0005) emit a
+  # flat array with resource_-prefixed keys, which .resources-only
+  # comparison cannot honestly diff against envelope output. No
+  # transitional dual-shape code — refuse outright.
+  [[ -f "$1/aws_resource_inventory/lib/envelope.py" ]] || fail \
+    "worktree $1 predates the JSON envelope — its flat-array output
+     cannot be compared against the envelope's .resources. Both refs
+     must include the envelope commit
+     (aws_resource_inventory/lib/envelope.py)."
+
   ( cd "$1" && "$VENV_PYTHON" -m aws_resource_inventory.cli \
       "${SCAN_ARGS[@]}" -o "$2" ) >"$2.log" 2>&1 \
     || { echo "ERROR: scan failed for $1 — log follows" >&2; tail -30 "$2.log" >&2; exit 2; }
@@ -138,12 +151,14 @@ echo "==> Scanning with AFTER code (${REGIONS})"
 run_scan "${WORKDIR}/after" "${WORKDIR}/after.json"
 
 # --- compare ------------------------------------------------------------------
-SORT='sort_by(.resource_type, .resource_id, .resource_arn)'
+# .resources only: started_at/duration_seconds in the scan block are
+# non-deterministic by design and must never fail the comparison.
+SORT='.resources | sort_by(.region, .type, .id)'
 jq -S "${SORT}" "${WORKDIR}/before.json" > "${WORKDIR}/before.sorted.json"
 jq -S "${SORT}" "${WORKDIR}/after.json" > "${WORKDIR}/after.sorted.json"
 
-BEFORE_COUNT="$(jq length "${WORKDIR}/before.json")"
-AFTER_COUNT="$(jq length "${WORKDIR}/after.json")"
+BEFORE_COUNT="$(jq '.resources | length' "${WORKDIR}/before.json")"
+AFTER_COUNT="$(jq '.resources | length' "${WORKDIR}/after.json")"
 echo "==> Resources found: before=${BEFORE_COUNT} after=${AFTER_COUNT}"
 
 if diff -u "${WORKDIR}/before.sorted.json" "${WORKDIR}/after.sorted.json"; then

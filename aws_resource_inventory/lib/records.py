@@ -72,17 +72,20 @@ class Resource:
         return self.resource_type.split(":", 1)[0]
 
     def to_record(self) -> dict[str, Any]:
-        """Serialize to the flat record dict (stable key order).
+        """Serialize to the envelope's bare-key record (stable key order).
 
-        ``arn_source`` is deliberately NOT serialized yet: the JSON
-        envelope chunk emits it.
+        The serialized keys are the public schema's vocabulary
+        (region/type/id/name/arn/arn_source, ADR-0005); the dataclass
+        attributes keep their resource_-prefixed names — they are the
+        internal API and only serialization renames.
         """
         return {
             "region": self.region,
-            "resource_name": self.resource_name,
-            "resource_type": self.resource_type,
-            "resource_id": self.resource_id,
-            "resource_arn": self.resource_arn,
+            "type": self.resource_type,
+            "id": self.resource_id,
+            "name": self.resource_name,
+            "arn": self.resource_arn,
+            "arn_source": self.arn_source,
         }
 
 

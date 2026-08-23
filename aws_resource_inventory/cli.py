@@ -12,6 +12,7 @@ import signal
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,6 +29,8 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 from rich.table import Table
+
+from aws_resource_inventory.lib.envelope import ScanFilters
 
 # Import logging configuration
 from aws_resource_inventory.lib.logging import (
@@ -401,6 +404,9 @@ def scan_command(
     while True:
         scan_count += 1
         start_time = time.time()
+        # The envelope's started_at: captured per scan iteration, UTC,
+        # second precision, trailing Z.
+        started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         if debug:
             logger.debug("Starting scan iteration #%d", scan_count)
@@ -562,6 +568,14 @@ def scan_command(
                 if should_use_resource_groups_api(tag_key, tag_value, all_services)
                 else "services"
             )
+            # The tagging path discovers by tag across all services and
+            # never reads the service list — recording it would be a lie.
+            scan_filters = ScanFilters(
+                services=None if scan_source == "tagging" else list(services),
+                tag_key=tag_key,
+                tag_value=tag_value,
+                all_services=all_services,
+            )
             resource_count = output_results(
                 all_results,
                 current_output_file,
@@ -569,6 +583,10 @@ def scan_command(
                 debug,
                 identity=caller_identity,
                 source=scan_source,
+                regions=region_list,
+                filters=scan_filters,
+                started_at=started_at,
+                duration_seconds=round(scan_duration, 1),
             )
 
             # Show scan completion status

@@ -16,6 +16,7 @@ from rich.table import Table
 from aws_resource_inventory.services.registry import SERVICES
 
 from .arn import extract_resource_id_from_arn
+from .envelope import ScanFilters, build_envelope, tool_version
 from .logging import get_logger
 from .records import CallerIdentity, Resource, name_from_tags
 from .resource_groups_utils import SERVICE_SHAPED_SECTIONS
@@ -220,6 +221,10 @@ def output_results(
     *,
     identity: CallerIdentity,
     source: Literal["services", "tagging"],
+    regions: list[str],
+    filters: ScanFilters,
+    started_at: str,
+    duration_seconds: float,
 ) -> int:
     """Process results using modular output processors and format for output.
 
@@ -230,6 +235,10 @@ def output_results(
     always knows (it chose the path). "tagging" results are Resource
     Groups API shaped and go through the generic processor; "services"
     results route to each service's registered processor.
+
+    ``regions``, ``filters``, ``started_at`` (UTC ISO-8601 with Z) and
+    ``duration_seconds`` fill the envelope's scan block — the caller
+    owns the clock and the resolved scan parameters.
 
     Returns:
         int: The total number of flattened resources found.
@@ -263,20 +272,33 @@ def output_results(
     # Ensure output directory exists before writing files
     ensure_output_directory(output_file)
 
+    # Every serialized scan is the self-describing envelope document
+    # (schema_version 1, ADR-0005) — never a bare resource array.
+    envelope = build_envelope(
+        flattened_resources,
+        version=tool_version(),
+        identity=identity,
+        regions=regions,
+        source=source,
+        filters=filters,
+        started_at=started_at,
+        duration_seconds=duration_seconds,
+    )
+    serialized = json.dumps(envelope, indent=2)
+
     # Output in the requested format
-    records = [resource.to_record() for resource in flattened_resources]
     if output_format == "json":
-        output_file.write_text(json.dumps(records, indent=2))
+        output_file.write_text(serialized)
         console.print(f"[green]Results saved to {output_file}[/green]")
         # Also print to console for immediate viewing
-        console.print(json.dumps(records, indent=2))
+        console.print(serialized)
     elif output_format == "table":
         # Create and display the standardized table
         table = create_aws_resources_table(flattened_resources, debug)
         console.print(table)
 
-        # Also save table data as JSON to file
-        output_file.write_text(json.dumps(records, indent=2))
+        # Also save the envelope to file
+        output_file.write_text(serialized)
         console.print(f"[green]Data also saved to {output_file}[/green]")
     elif output_format in ("md", "markdown"):
         # Generate markdown summary report

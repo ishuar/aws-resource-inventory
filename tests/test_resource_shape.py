@@ -31,10 +31,11 @@ GOV_IDENTITY = CallerIdentity(account="111122223333", partition="aws-us-gov")
 
 REQUIRED_KEYS = {
     "region",
-    "resource_name",
-    "resource_type",
-    "resource_id",
-    "resource_arn",
+    "type",
+    "id",
+    "name",
+    "arn",
+    "arn_source",
 }
 
 # The synthesized-name patterns this tool used to invent. Deleted
@@ -242,17 +243,15 @@ def test_no_identity_field_is_ever_na(service: str) -> None:
     # The core guarantee of the identity work: every record has a real
     # id and a real ARN. "N/A" is banned output.
     for record in flatten(service):
-        assert record["resource_id"] not in ("", "N/A"), record
-        assert record["resource_arn"] not in ("", "N/A"), record
-        assert record["resource_arn"].startswith("arn:"), record
+        assert record["id"] not in ("", "N/A"), record
+        assert record["arn"] not in ("", "N/A"), record
+        assert record["arn"].startswith("arn:"), record
 
 
 def test_resource_types_are_pinned_per_producer() -> None:
     # The resource_type vocabulary is the tool's public output language —
     # dashboards and diffs downstream key on these exact strings.
-    by_service = {
-        s: sorted({r["resource_type"] for r in flatten(s)}) for s in PROCESSORS
-    }
+    by_service = {s: sorted({r["type"] for r in flatten(s)}) for s in PROCESSORS}
     assert by_service == {
         "ec2": [
             "ec2:image",
@@ -306,7 +305,7 @@ def test_resource_type_starts_with_the_cli_service_key(service: str) -> None:
     # `scan --service <left half>`. PROCESSORS is derived from SERVICES,
     # so every service reaching here is a --service value by construction.
     for record in flatten(service):
-        assert record["resource_type"].split(":")[0] == service, record
+        assert record["type"].split(":")[0] == service, record
 
 
 def test_load_balancer_flavour_comes_from_aws_type_attribute() -> None:
@@ -341,7 +340,7 @@ def test_load_balancer_flavour_comes_from_aws_type_attribute() -> None:
 def test_arn_source_is_pinned_per_producer() -> None:
     # Which ARNs come from the AWS API (observed) and which this tool
     # builds from the caller identity (constructed) is part of the
-    # contract — the JSON envelope chunk will serialize it.
+    # contract — the JSON envelope serializes it on every record.
     by_type = {
         r.resource_type: r.arn_source for s in PROCESSORS for r in flatten_resources(s)
     }
@@ -393,7 +392,7 @@ def test_constructed_arns_follow_the_documented_formats() -> None:
     # AMIs shared from other accounts), but AWS reports an owned image or
     # snapshot with the owner's account, and this scanner only ever asks
     # for self-owned ones. Launch templates are an ec2 resource.
-    ec2 = {r["resource_type"]: r["resource_arn"] for r in flatten("ec2")}
+    ec2 = {r["type"]: r["arn"] for r in flatten("ec2")}
     assert ec2 == {
         "ec2:instance": "arn:aws:ec2:eu-central-1:111122223333:instance/i-1",
         "ec2:volume": "arn:aws:ec2:eu-central-1:111122223333:volume/vol-1",
@@ -402,7 +401,7 @@ def test_constructed_arns_follow_the_documented_formats() -> None:
         "ec2:snapshot": "arn:aws:ec2:eu-central-1:111122223333:snapshot/snap-1",
     }
 
-    vpc = {r["resource_type"]: r["resource_arn"] for r in flatten("vpc")}
+    vpc = {r["type"]: r["arn"] for r in flatten("vpc")}
     assert vpc == {
         "vpc:vpc": "arn:aws:ec2:eu-central-1:111122223333:vpc/vpc-1",
         "vpc:subnet": "arn:aws:ec2:eu-central-1:111122223333:subnet/subnet-1",
@@ -414,13 +413,13 @@ def test_constructed_arns_follow_the_documented_formats() -> None:
         "vpc:vpc-endpoint": "arn:aws:ec2:eu-central-1:111122223333:vpc-endpoint/vpce-1",
     }
 
-    asg = {r["resource_type"]: r["resource_arn"] for r in flatten("autoscaling")}
+    asg = {r["type"]: r["arn"] for r in flatten("autoscaling")}
     assert (
         asg["autoscaling:launch-template"]
         == "arn:aws:ec2:eu-central-1:111122223333:launch-template/lt-1"
     )
 
-    assert flatten("s3")[0]["resource_arn"] == "arn:aws:s3:::my-bucket"
+    assert flatten("s3")[0]["arn"] == "arn:aws:s3:::my-bucket"
 
 
 def test_partition_flows_into_every_constructed_arn() -> None:
@@ -433,12 +432,11 @@ def test_partition_flows_into_every_constructed_arn() -> None:
 
 @pytest.mark.parametrize("service", sorted(PROCESSORS))
 def test_resource_name_key_is_always_present(service: str) -> None:
-    # Deliberate reversal of the old "resource_name is optional" pin:
-    # the key is always serialized, None (JSON null) when AWS supplies
-    # no name — so the data loads into pandas/Parquet/SQL without
-    # ragged rows and consumers never need hasattr-style checks.
+    # The name key is always serialized, None (JSON null) when AWS
+    # supplies no name — so the data loads into pandas/Parquet/SQL
+    # without ragged rows and consumers never need hasattr-style checks.
     for record in flatten(service):
-        assert "resource_name" in record, record
+        assert "name" in record, record
 
 
 @pytest.mark.parametrize("service", sorted(PROCESSORS))
@@ -447,10 +445,10 @@ def test_resource_name_is_real_or_null_never_invented(service: str) -> None:
     # id and never one of the synthesized patterns this tool used to
     # fabricate (VPC-{cidr}, {protocol}:{port}, Rule-{priority}, ...).
     for record in flatten(service):
-        name = record["resource_name"]
+        name = record["name"]
         if name is None:
             continue
-        assert name != record["resource_id"], record
+        assert name != record["id"], record
         for pattern in BANNED_INVENTED_NAME_PATTERNS:
             assert not re.match(pattern, name), (pattern, record)
 
@@ -458,9 +456,7 @@ def test_resource_name_is_real_or_null_never_invented(service: str) -> None:
 def test_resource_names_are_pinned_per_producer() -> None:
     # The full name decision table, one row per resource type: a real
     # AWS-supplied name (Name/name attribute or Name tag) or None.
-    by_type = {
-        r["resource_type"]: r["resource_name"] for s in PROCESSORS for r in flatten(s)
-    }
+    by_type = {r["type"]: r["name"] for s in PROCESSORS for r in flatten(s)}
     assert by_type == {
         # ec2: security_group and ami have genuine name attributes;
         # instance, volume and snapshot use the Name tag (a snapshot
@@ -545,24 +541,22 @@ def test_ec2_name_tag_or_null_for_instances_and_volumes() -> None:
 
 def test_identity_fields_per_producer() -> None:
     s3_record = flatten("s3")[0]
-    assert s3_record["resource_id"] == "my-bucket"
-    assert s3_record["resource_arn"] == "arn:aws:s3:::my-bucket"
+    assert s3_record["id"] == "my-bucket"
+    assert s3_record["arn"] == "arn:aws:s3:::my-bucket"
 
     # ELBv2 ids are extracted from the observed ARN and keep the full
     # path after the resource-type segment — AWS's own id shape.
-    elb_records = {r["resource_type"]: r for r in flatten("elb")}
-    assert (
-        elb_records["elb:loadbalancer-application"]["resource_id"] == "app/my-alb/abc"
-    )
-    assert elb_records["elb:listener"]["resource_id"] == "app/my-alb/abc/ghi"
-    assert elb_records["elb:listener-rule"]["resource_id"] == "app/my-alb/abc/ghi/jkl"
-    assert elb_records["elb:targetgroup"]["resource_id"] == "my-tg/def"
+    elb_records = {r["type"]: r for r in flatten("elb")}
+    assert elb_records["elb:loadbalancer-application"]["id"] == "app/my-alb/abc"
+    assert elb_records["elb:listener"]["id"] == "app/my-alb/abc/ghi"
+    assert elb_records["elb:listener-rule"]["id"] == "app/my-alb/abc/ghi/jkl"
+    assert elb_records["elb:targetgroup"]["id"] == "my-tg/def"
 
-    ecs_records = {r["resource_type"]: r for r in flatten("ecs")}
-    assert ecs_records["ecs:task-definition"]["resource_id"] == "api:3"
+    ecs_records = {r["type"]: r for r in flatten("ecs")}
+    assert ecs_records["ecs:task-definition"]["id"] == "api:3"
 
-    asg_records = {r["resource_type"]: r for r in flatten("autoscaling")}
-    assert asg_records["autoscaling:launch-template"]["resource_id"] == "lt-1"
+    asg_records = {r["type"]: r for r in flatten("autoscaling")}
+    assert asg_records["autoscaling:launch-template"]["id"] == "lt-1"
 
 
 def test_resource_missing_its_id_is_skipped_not_emitted_as_na() -> None:
@@ -846,16 +840,18 @@ def test_generic_processor_flattens_resource_groups_records() -> None:
     assert [resource.to_record() for resource in resources] == [
         {
             "region": REGION,
-            "resource_name": None,
-            "resource_type": "ec2:instance",
-            "resource_id": "i-9",
-            "resource_arn": "arn:aws:ec2:eu-central-1:1:instance/i-9",
+            "type": "ec2:instance",
+            "id": "i-9",
+            "name": None,
+            "arn": "arn:aws:ec2:eu-central-1:1:instance/i-9",
+            "arn_source": "observed",
         },
         {
             "region": REGION,
-            "resource_name": None,
-            "resource_type": "lambda:function",
-            "resource_id": "fn",
-            "resource_arn": "arn:aws:lambda:eu-central-1:1:function:fn",
+            "type": "lambda:function",
+            "id": "fn",
+            "name": None,
+            "arn": "arn:aws:lambda:eu-central-1:1:function:fn",
+            "arn_source": "observed",
         },
     ]

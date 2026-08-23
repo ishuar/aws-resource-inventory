@@ -97,26 +97,29 @@ class TestProcessEfsOutput:
         assert [r.to_record() for r in flattened] == [
             {
                 "region": REGION,
-                "resource_name": "shared-data",
-                "resource_type": "efs:file-system",
-                "resource_id": "fs-0123456789abcdef0",
-                "resource_arn": FS_NAMED["FileSystemArn"],
+                "type": "efs:file-system",
+                "id": "fs-0123456789abcdef0",
+                "name": "shared-data",
+                "arn": FS_NAMED["FileSystemArn"],
+                "arn_source": "observed",
             },
             {
                 # No Name tag: null, never a copy of the id.
                 "region": REGION,
-                "resource_name": None,
-                "resource_type": "efs:file-system",
-                "resource_id": "fs-0fedcba9876543210",
-                "resource_arn": FS_UNNAMED["FileSystemArn"],
+                "type": "efs:file-system",
+                "id": "fs-0fedcba9876543210",
+                "name": None,
+                "arn": FS_UNNAMED["FileSystemArn"],
+                "arn_source": "observed",
             },
             {
                 # A Name tag that merely repeats the id is not a name.
                 "region": REGION,
-                "resource_name": None,
-                "resource_type": "efs:file-system",
-                "resource_id": "fs-00112233445566778",
-                "resource_arn": FS_NAME_REPEATS_ID["FileSystemArn"],
+                "type": "efs:file-system",
+                "id": "fs-00112233445566778",
+                "name": None,
+                "arn": FS_NAME_REPEATS_ID["FileSystemArn"],
+                "arn_source": "observed",
             },
         ]
 

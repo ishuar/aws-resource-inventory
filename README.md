@@ -273,6 +273,52 @@ aws-inventory scan --format md --output report.md
 aws-inventory scan --tag-key Environment --tag-value Production --format json --output prod-resources.json
 ```
 
+The JSON file (also written by the table format) is one self-describing
+document — scan metadata, a summary, and the flat `resources` array,
+sorted by region → type → id:
+
+```json
+{
+  "schema_version": 1,
+  "scan": {
+    "tool": { "name": "aws-resource-inventory", "version": "0.2.0" },
+    "account": "111122223333",
+    "partition": "aws",
+    "regions": ["eu-central-1"],
+    "source": "services",
+    "filters": {
+      "services": ["ec2", "s3"],
+      "tag_key": null,
+      "tag_value": null,
+      "all_services": false
+    },
+    "started_at": "2026-08-23T09:14:22Z",
+    "duration_seconds": 12.4
+  },
+  "summary": {
+    "total": 1,
+    "by_region": { "eu-central-1": 1 },
+    "by_type": { "ec2:instance": 1 }
+  },
+  "resources": [
+    {
+      "region": "eu-central-1",
+      "type": "ec2:instance",
+      "id": "i-0abc123def456789a",
+      "name": "web-server-prod-01",
+      "arn": "arn:aws:ec2:eu-central-1:111122223333:instance/i-0abc123def456789a",
+      "arn_source": "constructed"
+    }
+  ]
+}
+```
+
+Every resource carries the same six keys (`name` is `null` when AWS
+supplies none; `arn_source` states whether the ARN was observed from
+the API or constructed from the caller identity), so the data loads
+straight into `jq`, pandas, or SQL. `schema_version` bumps only on
+breaking changes.
+
 ### Advanced Options
 
 ```bash
@@ -377,6 +423,7 @@ aws-resource-inventory/
 │   ├── lib/                         # Shared engine and infrastructure
 │   │   ├── engine.py                # Pagination, concurrency, error policy
 │   │   ├── records.py               # Resource + CallerIdentity — the typed record every output consumes
+│   │   ├── envelope.py              # The JSON envelope — the tool's public output schema
 │   │   ├── arn.py                   # ARN id extraction shared by both scan paths
 │   │   ├── clients.py               # The only boto3 client factory (pooling, adaptive retries)
 │   │   ├── scan.py                  # Region/service scan orchestration + caching hooks
