@@ -13,9 +13,11 @@ once from STS GetCallerIdentity; every constructed ARN is built from it.
 ``resource_name`` is a name AWS itself supplies — a Name/name attribute
 or the ``Name`` tag — or ``None``: names are never synthesized and never
 copies of the id. ``name_from_tags`` is the one reader of the ``Name``
-tag, shared by the per-service scanners and the tag scan so a resource
-gets the same name whichever path found it. Serialization always emits
-the key (JSON ``null`` when AWS supplies no name), so every record has
+tag, shared by the per-service scanners and the tag scan, so the same
+``Name`` tag yields the same name whichever path found the resource. A
+name taken from a name *attribute* is service-path only: the Tagging API
+returns an ARN and tags, never the attribute (ADR-0005 Consequences).
+Serialization always emits the key (JSON ``null`` when AWS supplies no name), so every record has
 the same keys and the data loads into tabular tools without ragged rows.
 """
 
@@ -89,8 +91,10 @@ class Resource:
 def name_from_tags(tags: Any, resource_id: str) -> str | None:
     """The AWS-supplied ``Name`` tag, or ``None`` — names are never invented.
 
-    Every producer that has tags to read reads them here, so a resource
-    gets the same name from the per-service scan and from the tag scan.
+    Every producer that has tags to read reads them here, so the same
+    ``Name`` tag yields the same name from the per-service scan and from
+    the tag scan. A name that comes from a name *attribute* is
+    service-path only — the Tagging API never returns the attribute.
 
     Two AWS quirks are absorbed: tag lists are ``Key``/``Value``
     everywhere except ECS, which uses lowercase ``key``/``value``; and
