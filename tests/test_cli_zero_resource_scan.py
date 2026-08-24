@@ -28,6 +28,10 @@ IDENTITY = CallerIdentity(account="111122223333", partition="aws")
 @pytest.fixture()
 def empty_scan(monkeypatch: pytest.MonkeyPatch) -> None:
     """Valid credentials, a fan-out that finds nothing in any region."""
+    # get_session runs before credential validation and reads the real
+    # AWS config. The suite must pass with none (no profile, no
+    # credentials), so the session is faked here too.
+    monkeypatch.setattr(cli_module, "get_session", lambda profile: object())
     monkeypatch.setattr(
         cli_module,
         "validate_aws_credentials",
