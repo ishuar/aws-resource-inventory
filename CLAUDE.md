@@ -184,8 +184,8 @@ reintroduce them.
   `aws_resource_inventory.lib.*` and `aws_resource_inventory.services.*`;
   never add a new top-level module.
 - Adding a service = one module + one `SERVICES` registry entry.
-- The flattened record contract (region/resource_type/resource_id/
-  resource_arn, optional resource_name) is pinned by
+- The flattened record contract (region/resource_name/resource_type/
+  resource_id/resource_arn — every key always present) is pinned by
   tests/test_resource_shape.py — changing it is a deliberate act.
 - Shipped: the shared scanning engine
   (`aws_resource_inventory/lib/engine.py`) —
@@ -224,7 +224,12 @@ reintroduce them.
 - Resource names are **real or null**: `resource_name` is a name AWS
   itself supplies (a Name/name attribute or the `Name` tag) or `None` —
   never synthesized, never a copy of the id — and the serialized record
-  always carries the key (JSON `null` when absent). Pinned per type in
+  always carries the key (JSON `null` when absent). The `Name` tag has
+  exactly one reader, `lib/records.py` `name_from_tags`, called by every
+  producer that has tags and by the tag-scan processor, so a name never
+  depends on which scan path found the resource; it absorbs ECS's
+  lowercase `key`/`value` shape and RDS's `TagList` field, and drops a
+  tag that merely repeats the id. Pinned per type in
   tests/test_resource_shape.py; displays fall back to the id.
 - Remaining deepening work, in order: unify
   the six copies of the scan-path predicate (`all_services or tag_key

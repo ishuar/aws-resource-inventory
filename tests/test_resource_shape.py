@@ -7,9 +7,10 @@ exactly these keys, a real id and a real ARN on every record — never
 identity (account + partition) using the documented per-type formats, and
 every record states whether its ARN was observed or constructed.
 resource_name is a name AWS itself supplies (a Name/name attribute or
-the Name tag) or None — never synthesized, never an id copy — and the
-key is always serialized. Any change to the shape is a deliberate
-decision, not an accident.
+the Name tag, read by lib.records.name_from_tags on both scan paths) or
+None — never synthesized, never an id copy — and the key is always
+serialized. Any change to the shape is a deliberate decision, not an
+accident.
 """
 
 import re
@@ -54,19 +55,34 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
         "volumes": [{"VolumeId": "vol-1", "Tags": []}],
         "security_groups": [{"GroupId": "sg-1", "GroupName": "default"}],
         "amis": [{"ImageId": "ami-1", "Name": "golden"}],
-        "snapshots": [{"SnapshotId": "snap-1", "Description": "backup"}],
+        "snapshots": [
+            {
+                "SnapshotId": "snap-1",
+                "Description": "backup",
+                "Tags": [{"Key": "Name", "Value": "nightly"}],
+            }
+        ],
     },
     "s3": {"buckets": [{"Name": "my-bucket"}]},
     "vpc": {
-        "vpcs": [{"VpcId": "vpc-1", "CidrBlock": "10.0.0.0/16"}],
+        "vpcs": [
+            {
+                "VpcId": "vpc-1",
+                "CidrBlock": "10.0.0.0/16",
+                "Tags": [{"Key": "Name", "Value": "prod"}],
+            }
+        ],
         "subnets": [
             {
                 "SubnetId": "subnet-1",
                 "CidrBlock": "10.0.1.0/24",
                 "SubnetArn": "arn:aws:ec2:eu-central-1:111122223333:subnet/subnet-1",
+                "Tags": [{"Key": "Name", "Value": "prod-public-a"}],
             }
         ],
-        "nat_gateways": [{"NatGatewayId": "nat-1"}],
+        "nat_gateways": [
+            {"NatGatewayId": "nat-1", "Tags": [{"Key": "Name", "Value": "egress"}]}
+        ],
         "internet_gateways": [{"InternetGatewayId": "igw-1"}],
         "route_tables": [{"RouteTableId": "rtb-1"}],
         "dhcp_options": [{"DhcpOptionsId": "dopt-1"}],
@@ -108,6 +124,7 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
             {
                 "clusterName": "prod",
                 "clusterArn": "arn:aws:ecs:eu-central-1:1:cluster/prod",
+                "tags": [{"key": "Name", "value": "Production"}],
             }
         ],
         "services": [
@@ -140,6 +157,7 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
             {
                 "DBInstanceIdentifier": "app-db",
                 "DBInstanceArn": "arn:aws:rds:eu-central-1:1:db:app-db",
+                "TagList": [{"Key": "Name", "Value": "orders primary"}],
             }
         ],
         "db_clusters": [
@@ -166,6 +184,9 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
             {
                 "AutoScalingGroupName": "web-asg",
                 "AutoScalingGroupARN": "arn:aws:autoscaling:eu-central-1:1:autoScalingGroup:x:autoScalingGroupName/web-asg",
+                # The ASG Name tag mirrors the group name: a name that
+                # repeats the id is not a name, so this stays None.
+                "Tags": [{"Key": "Name", "Value": "web-asg"}],
             }
         ],
         "launch_configurations": [
@@ -440,45 +461,50 @@ def test_resource_names_are_pinned_per_producer() -> None:
         r["resource_type"]: r["resource_name"] for s in PROCESSORS for r in flatten(s)
     }
     assert by_type == {
-        # ec2: instance/volume use the Name tag; security_group and ami
-        # have genuine name attributes; a snapshot Description is not a
-        # name.
+        # ec2: security_group and ami have genuine name attributes;
+        # instance, volume and snapshot use the Name tag (a snapshot
+        # Description is not a name), and the untagged volume stays None.
         "ec2:instance": "web",
         "ec2:volume": None,
         "ec2:security-group": "default",
         "ec2:image": "golden",
-        "ec2:snapshot": None,
-        # s3: the bucket name IS the id — no separate name exists.
+        "ec2:snapshot": "nightly",
+        # s3: ListBuckets returns no tags and the bucket name IS the id.
         "s3:bucket": None,
-        # vpc: the API supplies no name attribute for any of these.
-        "vpc:vpc": None,
-        "vpc:subnet": None,
-        "vpc:natgateway": None,
+        # vpc: no API here supplies a name attribute, so the Name tag is
+        # the only source — present on three fixtures, absent on the rest.
+        "vpc:vpc": "prod",
+        "vpc:subnet": "prod-public-a",
+        "vpc:natgateway": "egress",
         "vpc:internet-gateway": None,
         "vpc:route-table": None,
         "vpc:dhcp-options": None,
         "vpc:vpc-peering-connection": None,
         "vpc:vpc-endpoint": None,
         # elb: load balancers and target groups carry real AWS names;
-        # listeners and rules have none.
+        # listeners and rules have none, and no elbv2 describe response
+        # returns tags.
         "elb:loadbalancer-application": "my-alb",
         "elb:targetgroup": "my-tg",
         "elb:listener": None,
         "elb:listener-rule": None,
-        # ecs: the AWS "name" IS the resource_id by construction.
-        "ecs:cluster": None,
+        # ecs: the AWS "name" IS the resource_id, so only a Name tag can
+        # add anything — read from ECS's lowercase tag shape.
+        "ecs:cluster": "Production",
         "ecs:service": None,
         "ecs:task-definition": None,
         "ecs:capacity-provider": None,
         # efs: Name is a genuine attribute (surfaced from the Name tag).
         "efs:file-system": "shared-data",
-        # rds: the identifier IS the id — no separate name exists.
-        "rds:db": None,
+        # rds: the identifier IS the id, so only a Name tag (RDS calls
+        # the field TagList) can add anything.
+        "rds:db": "orders primary",
         "rds:cluster": None,
         "rds:snapshot": None,
         "rds:cluster-snapshot": None,
-        # autoscaling: group/launch-config names ARE their ids; launch
-        # templates have a name genuinely distinct from lt-<id>.
+        # autoscaling: the ASG fixture's Name tag mirrors its group name,
+        # so it stays None; launch configurations carry no tags at all;
+        # a launch template's name is genuinely distinct from its lt- id.
         "autoscaling:autoScalingGroup": None,
         "autoscaling:launchConfiguration": None,
         "autoscaling:launch-template": "web-lt",
@@ -613,6 +639,42 @@ def test_same_resource_yields_the_same_identity_via_both_scan_paths() -> None:
         assert (resource.resource_id, resource.resource_arn) in service_side, resource
 
 
+def test_the_name_tag_yields_the_same_name_via_both_scan_paths() -> None:
+    # Path independence for the name, the counterpart of the identity
+    # test above. The tag scan already carries every resource's tags, so
+    # it reads them with the same helper instead of dropping a name AWS
+    # supplied — otherwise one instance is "web" under `scan` and null
+    # under `scan --tag-key`.
+    tags = [{"Key": "Name", "Value": "web"}]
+    service_side: list[Resource] = []
+    process_ec2_output(
+        {"instances": [{"InstanceId": "i-7", "Tags": tags}]},
+        REGION,
+        service_side,
+        IDENTITY,
+    )
+    tagging_side: list[Resource] = []
+    process_generic_service_output(
+        {
+            "instances": [
+                {
+                    "ResourceARN": "arn:aws:ec2:eu-central-1:111122223333:instance/i-7",
+                    "ResourceId": "i-7",
+                    "ResourceType": "ec2:instance",
+                    "Tags": tags,
+                }
+            ]
+        },
+        REGION,
+        tagging_side,
+        IDENTITY,
+    )
+
+    (from_service,) = service_side
+    (from_tagging,) = tagging_side
+    assert from_service.resource_name == from_tagging.resource_name == "web"
+
+
 def test_tagging_path_types_keep_the_aws_native_prefix() -> None:
     # Counterpart to test_resource_type_starts_with_the_cli_service_key:
     # the tagging path passes AWS's own ResourceType through untouched,
@@ -650,6 +712,7 @@ def test_generic_processor_flattens_resource_groups_records() -> None:
                 "ResourceId": "i-9",
                 "ResourceType": "ec2:instance",
                 "Region": REGION,
+                # Tags without a Name key leave resource_name None.
                 "Tags": [{"Key": "env", "Value": "prod"}],
             },
             {

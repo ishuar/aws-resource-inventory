@@ -33,7 +33,13 @@ that produced it, and the records inside it are unreliable as identity:
    (built by us), so consumers know which ARNs to trust byte-for-byte.
 4. `name` is the resource's real AWS name or `null` — never synthesised,
    never a copy of the id. `null` (not a missing key) keeps rows
-   rectangular for pandas/Parquet/SQL.
+   rectangular for pandas/Parquet/SQL. The `Name` tag counts as an
+   AWS-supplied name: AWS's own console shows it as the Name column and
+   the EFS API returns it as `Name`. It is read by one function
+   (`lib/records.py` `name_from_tags`) at every producer that has tags,
+   both scan paths included, so a resource's name does not depend on
+   which path found it. A `Name` tag whose value repeats the id is not a
+   name and yields `null`.
 5. `type` is `<CLI service key>:<AWS type>` (e.g. `ec2:instance`,
    `vpc:vpc`, `elb:listener`) on `source: "services"`: the left half is
    a valid `--service` value, so output round-trips into the CLI. On
@@ -160,6 +166,10 @@ Field notes:
   cache.
 - Some resources now show `name: null` where a synthesised name used to
   appear; renderers must fall back to the id for display.
+- Tag-scan (`source: "tagging"`) records carry names too: the Tagging
+  API returns every resource's tags, so the same `Name` tag produces the
+  same name on both paths. Where the tag is absent, or merely repeats
+  the id, the name is `null`.
 - The record contract test (`tests/test_resource_shape.py`) pins the six
   keys and the type vocabulary; changing either is a deliberate act and
   a `schema_version` review.

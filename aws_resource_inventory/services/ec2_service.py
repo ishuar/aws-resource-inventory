@@ -16,7 +16,11 @@ from typing import Any
 from aws_resource_inventory.lib.clients import get_scan_client
 from aws_resource_inventory.lib.engine import Describe, ScanResult, scan_keyed
 from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import CallerIdentity, Resource
+from aws_resource_inventory.lib.records import (
+    CallerIdentity,
+    Resource,
+    name_from_tags,
+)
 
 logger = get_logger()
 
@@ -54,14 +58,6 @@ def _skip_missing_id(resource_type: str, region: str) -> None:
     )
 
 
-def _name_tag(resource: dict[str, Any]) -> str | None:
-    """The AWS-supplied Name tag, or None — names are never invented."""
-    for tag in resource.get("Tags", []):
-        if tag["Key"] == "Name":
-            return str(tag["Value"])
-    return None
-
-
 def process_ec2_output(
     service_data: dict[str, Any],
     region: str,
@@ -86,7 +82,7 @@ def process_ec2_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=_name_tag(instance),
+                resource_name=name_from_tags(instance.get("Tags"), instance_id),
                 resource_type="ec2:instance",  # Unified format: service:type
                 resource_id=instance_id,
                 resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:instance/{instance_id}",
@@ -103,7 +99,7 @@ def process_ec2_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=_name_tag(volume),
+                resource_name=name_from_tags(volume.get("Tags"), volume_id),
                 resource_type="ec2:volume",
                 resource_id=volume_id,
                 resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:volume/{volume_id}",
@@ -157,9 +153,10 @@ def process_ec2_output(
             continue
         flattened_resources.append(
             Resource(
-                # A snapshot Description is not a name; AWS supplies no
-                # name attribute for snapshots, so resource_name is None.
+                # A snapshot Description is not a name and AWS supplies no
+                # name attribute, so the Name tag is the only source.
                 region=region,
+                resource_name=name_from_tags(snapshot.get("Tags"), snapshot_id),
                 resource_type="ec2:snapshot",
                 resource_id=snapshot_id,
                 # The owner's account, as for images above: the scan asks

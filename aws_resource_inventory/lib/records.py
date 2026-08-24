@@ -12,9 +12,11 @@ once from STS GetCallerIdentity; every constructed ARN is built from it.
 
 ``resource_name`` is a name AWS itself supplies — a Name/name attribute
 or the ``Name`` tag — or ``None``: names are never synthesized and never
-copies of the id. Serialization always emits the key (JSON ``null`` when
-AWS supplies no name), so every record has the same keys and the data
-loads into tabular tools without ragged rows.
+copies of the id. ``name_from_tags`` is the one reader of the ``Name``
+tag, shared by the per-service scanners and the tag scan so a resource
+gets the same name whichever path found it. Serialization always emits
+the key (JSON ``null`` when AWS supplies no name), so every record has
+the same keys and the data loads into tabular tools without ragged rows.
 """
 
 from dataclasses import dataclass
@@ -70,11 +72,10 @@ class Resource:
         return self.resource_type.split(":", 1)[0]
 
     def to_record(self) -> dict[str, Any]:
-        """Serialize to the legacy record dict (stable key order).
+        """Serialize to the flat record dict (stable key order).
 
         ``arn_source`` is deliberately NOT serialized yet: the JSON
-        envelope chunk emits it. Until then, serialized output changes
-        only in resource_id/resource_arn values.
+        envelope chunk emits it.
         """
         return {
             "region": self.region,
@@ -83,3 +84,25 @@ class Resource:
             "resource_id": self.resource_id,
             "resource_arn": self.resource_arn,
         }
+
+
+def name_from_tags(tags: Any, resource_id: str) -> str | None:
+    """The AWS-supplied ``Name`` tag, or ``None`` — names are never invented.
+
+    Every producer that has tags to read reads them here, so a resource
+    gets the same name from the per-service scan and from the tag scan.
+
+    Two AWS quirks are absorbed: tag lists are ``Key``/``Value``
+    everywhere except ECS, which uses lowercase ``key``/``value``; and
+    RDS calls the field ``TagList`` rather than ``Tags``, so callers pass
+    the list, not the field name. A ``Name`` tag whose value merely
+    repeats ``resource_id`` is not a name — common on auto scaling groups
+    and RDS instances, whose tag mirrors the identifier — and yields
+    ``None``, keeping "never a copy of the id" true on the tag path too.
+    """
+    for tag in tags or []:
+        if tag.get("Key", tag.get("key")) != "Name":
+            continue
+        name = str(tag.get("Value", tag.get("value")))
+        return None if name == resource_id else name
+    return None

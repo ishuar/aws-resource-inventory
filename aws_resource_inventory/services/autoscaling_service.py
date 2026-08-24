@@ -19,7 +19,11 @@ from aws_resource_inventory.lib.engine import (
     run_parallel,
 )
 from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import CallerIdentity, Resource
+from aws_resource_inventory.lib.records import (
+    CallerIdentity,
+    Resource,
+    name_from_tags,
+)
 
 logger = get_logger()
 
@@ -113,9 +117,11 @@ def process_autoscaling_output(
 
         flattened_resources.append(
             Resource(
-                # An ASG's AWS "name" IS its id — copying it into
-                # resource_name would say nothing, so it stays None.
+                # An ASG's AWS "name" IS its id, so only a Name tag can
+                # add anything — and the usual Name tag mirrors the group
+                # name, which name_from_tags drops back to None.
                 region=region,
+                resource_name=name_from_tags(asg.get("Tags"), asg_name),
                 resource_type="autoscaling:autoScalingGroup",
                 resource_id=asg_name,
                 resource_arn=asg_arn,
@@ -136,8 +142,8 @@ def process_autoscaling_output(
 
         flattened_resources.append(
             Resource(
-                # A launch configuration's AWS "name" IS its id — it
-                # stays out of resource_name.
+                # A launch configuration's AWS "name" IS its id and the
+                # API returns no tags at all, so there is no name to have.
                 region=region,
                 resource_type="autoscaling:launchConfiguration",
                 resource_id=lc_name,

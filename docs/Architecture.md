@@ -57,8 +57,11 @@ where AWS returns no ARN the processor constructs one from the
 records which kind it is (`"observed"` | `"constructed"`). A raw dict
 with no usable id or ARN is skipped with a warning, never emitted.
 `resource_name` is a name AWS itself supplies (a Name/name attribute or
-the `Name` tag) or null — never synthesized, never a copy of the id.
-`to_record()` does not serialize `arn_source` yet.
+the `Name` tag) or null — never synthesized, never a copy of the id. The
+`Name` tag has one reader, `records.name_from_tags`, used by every
+producer with tags to read and by the tag-scan processor, so a name does
+not depend on which scan path found the resource. `to_record()` does not
+serialize `arn_source` yet.
 
 One subtlety: tag-path results are a hybrid. Most sections are Tagging
 API shaped, but the merged Auto Scaling section carries raw service
