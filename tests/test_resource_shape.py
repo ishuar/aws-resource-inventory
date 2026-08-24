@@ -639,40 +639,151 @@ def test_same_resource_yields_the_same_identity_via_both_scan_paths() -> None:
         assert (resource.resource_id, resource.resource_arn) in service_side, resource
 
 
-def test_the_name_tag_yields_the_same_name_via_both_scan_paths() -> None:
-    # Path independence for the name, the counterpart of the identity
-    # test above. The tag scan already carries every resource's tags, so
-    # it reads them with the same helper instead of dropping a name AWS
-    # supplied — otherwise one instance is "web" under `scan` and null
-    # under `scan --tag-key`.
-    tags = [{"Key": "Name", "Value": "web"}]
-    service_side: list[Resource] = []
-    process_ec2_output(
-        {"instances": [{"InstanceId": "i-7", "Tags": tags}]},
-        REGION,
-        service_side,
-        IDENTITY,
-    )
-    tagging_side: list[Resource] = []
-    process_generic_service_output(
+# Every producer whose only possible name is the ``Name`` tag: the
+# per-service scan and the tag scan must agree, or the same resource is
+# named under `scan` and nameless under `scan --tag-key`. The types whose
+# name comes from a name *attribute* cannot appear here — the Tagging API
+# returns only an ARN and tags, so it never sees the attribute
+# (ADR-0005 Consequences).
+NAME_TAG = [{"Key": "Name", "Value": "shared"}]
+ECS_NAME_TAG = [{"key": "Name", "value": "shared"}]
+
+BOTH_PATH_NAME_CASES: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
+    (
+        "ec2",
+        {"instances": [{"InstanceId": "i-7", "Tags": NAME_TAG}]},
         {
-            "instances": [
+            "ResourceARN": "arn:aws:ec2:eu-central-1:111122223333:instance/i-7",
+            "ResourceId": "i-7",
+            "ResourceType": "ec2:instance",
+            "Tags": NAME_TAG,
+        },
+    ),
+    (
+        "s3",
+        {"buckets": [{"Name": "my-bucket", "tags": NAME_TAG}]},
+        {
+            "ResourceARN": "arn:aws:s3:::my-bucket",
+            "ResourceType": "s3:bucket",
+            "Tags": NAME_TAG,
+        },
+    ),
+    (
+        "elb",
+        {
+            "listeners": [
                 {
-                    "ResourceARN": "arn:aws:ec2:eu-central-1:111122223333:instance/i-7",
-                    "ResourceId": "i-7",
-                    "ResourceType": "ec2:instance",
-                    "Tags": tags,
+                    "ListenerArn": (
+                        "arn:aws:elasticloadbalancing:eu-central-1:1:"
+                        "listener/app/my-alb/abc/ghi"
+                    ),
+                    "Tags": NAME_TAG,
                 }
             ]
         },
-        REGION,
-        tagging_side,
-        IDENTITY,
+        {
+            "ResourceARN": (
+                "arn:aws:elasticloadbalancing:eu-central-1:1:"
+                "listener/app/my-alb/abc/ghi"
+            ),
+            "ResourceType": "elasticloadbalancing:listener",
+            "Tags": NAME_TAG,
+        },
+    ),
+    (
+        "elb",
+        {
+            "listener_rules": [
+                {
+                    "RuleArn": (
+                        "arn:aws:elasticloadbalancing:eu-central-1:1:"
+                        "listener-rule/app/my-alb/abc/ghi/jkl"
+                    ),
+                    "Tags": NAME_TAG,
+                }
+            ]
+        },
+        {
+            "ResourceARN": (
+                "arn:aws:elasticloadbalancing:eu-central-1:1:"
+                "listener-rule/app/my-alb/abc/ghi/jkl"
+            ),
+            "ResourceType": "elasticloadbalancing:listener-rule",
+            "Tags": NAME_TAG,
+        },
+    ),
+    (
+        "efs",
+        {
+            "file_systems": [
+                {
+                    "FileSystemId": "fs-1",
+                    "FileSystemArn": (
+                        "arn:aws:elasticfilesystem:eu-central-1:1:file-system/fs-1"
+                    ),
+                    "Name": "shared",
+                    "Tags": NAME_TAG,
+                }
+            ]
+        },
+        {
+            "ResourceARN": (
+                "arn:aws:elasticfilesystem:eu-central-1:1:file-system/fs-1"
+            ),
+            "ResourceId": "fs-1",
+            "ResourceType": "elasticfilesystem:file-system",
+            "Tags": NAME_TAG,
+        },
+    ),
+    (
+        "ecs",
+        {
+            "capacity_providers": [
+                {
+                    "name": "cp-1",
+                    "capacityProviderArn": (
+                        "arn:aws:ecs:eu-central-1:1:capacity-provider/cp-1"
+                    ),
+                    "tags": ECS_NAME_TAG,
+                }
+            ]
+        },
+        {
+            "ResourceARN": "arn:aws:ecs:eu-central-1:1:capacity-provider/cp-1",
+            "ResourceId": "cp-1",
+            "ResourceType": "ecs:capacity-provider",
+            "Tags": NAME_TAG,
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("service", "service_data", "tagging_record"),
+    BOTH_PATH_NAME_CASES,
+    ids=[case[2]["ResourceType"] for case in BOTH_PATH_NAME_CASES],
+)
+def test_the_name_tag_yields_the_same_name_via_both_scan_paths(
+    service: str,
+    service_data: dict[str, Any],
+    tagging_record: dict[str, Any],
+) -> None:
+    # Path independence for the name, the counterpart of the identity
+    # test above. The tag scan already carries every resource's tags, so
+    # it reads them with the same helper instead of dropping a name AWS
+    # supplied — otherwise one instance is "shared" under `scan` and null
+    # under `scan --tag-key`.
+    service_side: list[Resource] = []
+    PROCESSORS[service](service_data, REGION, service_side, IDENTITY)
+
+    tagging_side: list[Resource] = []
+    process_generic_service_output(
+        {"resources": [tagging_record]}, REGION, tagging_side, IDENTITY
     )
 
     (from_service,) = service_side
     (from_tagging,) = tagging_side
-    assert from_service.resource_name == from_tagging.resource_name == "web"
+    assert from_service.resource_name == from_tagging.resource_name == "shared"
 
 
 def test_tagging_path_types_keep_the_aws_native_prefix() -> None:

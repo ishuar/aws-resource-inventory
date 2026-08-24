@@ -22,7 +22,11 @@ from aws_resource_inventory.lib.engine import (
     run_parallel,
 )
 from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import CallerIdentity, Resource
+from aws_resource_inventory.lib.records import (
+    CallerIdentity,
+    Resource,
+    name_from_tags,
+)
 
 logger = get_logger()
 
@@ -91,9 +95,11 @@ def process_s3_output(
 
         flattened_resources.append(
             Resource(
-                # The bucket name IS the id — no separate name exists,
-                # so resource_name stays None.
+                # AWS gives a bucket no name attribute — the bucket
+                # name IS the id — so the Name tag is the only name it
+                # can have. The scanner already fetched the TagSet.
                 region=region,
+                resource_name=name_from_tags(bucket.get("tags"), bucket_name),
                 resource_type="s3:bucket",
                 resource_id=bucket_name,
                 resource_arn=f"arn:{identity.partition}:s3:::{bucket_name}",

@@ -138,12 +138,13 @@ def scan_ecs(session: Any, region: str) -> ScanResult:
 
         if result["clusters"]:
             try:
-                # describe_capacity_providers has no paginator.
-                result[
-                    "capacity_providers"
-                ] = ecs_client.describe_capacity_providers().get(
-                    "capacityProviders", []
-                )
+                # describe_capacity_providers has no paginator, and it
+                # returns tags only when include asks for them — without
+                # this a Name-tagged provider is nameless under `scan`
+                # and named under `scan --tag-key`.
+                result["capacity_providers"] = ecs_client.describe_capacity_providers(
+                    include=["TAGS"]
+                ).get("capacityProviders", [])
             except (ClientError, BotoCoreError) as e:
                 logger.warning("Could not list capacity providers: %s", e)
 
@@ -166,8 +167,10 @@ def process_ecs_output(
     """Process ECS scan results for output formatting.
 
     Every ECS resource's AWS name IS its resource_id, so a Name tag is
-    the only thing that can add a name. The scanner attaches each
-    resource's tags under "tags" (ECS's lowercase key/value shape).
+    the only thing that can add a name. Tags arrive under "tags" (ECS's
+    lowercase key/value shape): the scanner attaches them from
+    list_tags_for_resource for clusters, services and task definitions,
+    and capacity providers return theirs inline.
     """
     # ECS Clusters
     for cluster in service_data.get("clusters", []):

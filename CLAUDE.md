@@ -226,12 +226,20 @@ reintroduce them.
   never synthesized, never a copy of the id — and the serialized record
   always carries the key (JSON `null` when absent). The `Name` tag has
   exactly one reader, `lib/records.py` `name_from_tags`, called by every
-  producer that has tags and by the tag-scan processor, so a name never
-  depends on which scan path found the resource; it absorbs ECS's
+  producer that has tags and by the tag-scan processor, so the same
+  `Name` tag yields the same name on either scan path; it absorbs ECS's
   lowercase `key`/`value` shape and RDS's `TagList` field, and drops a
-  tag that merely repeats the id. Pinned per type in
-  tests/test_resource_shape.py; displays fall back to the id.
-- Remaining deepening work, in order: unify
+  tag that merely repeats the id. Every scanner must fetch the tags AWS
+  will give it — skipping a fetch is the one way that guarantee breaks.
+  A name from a name *attribute* is service-path only: the Tagging API
+  returns an ARN and tags, never the attribute (ADR-0005
+  Consequences). Pinned per type in tests/test_resource_shape.py;
+  displays fall back to the id.
+- Remaining deepening work, in order: give the tag scan the five
+  attribute-sourced names it cannot see (`ec2:security-group`,
+  `ec2:image`, `elb:loadbalancer-*`, `elb:targetgroup`,
+  `autoscaling:launch-template`) by batching one describe per type per
+  region over the ARNs the Tagging API returned; unify
   the six copies of the scan-path predicate (`all_services or tag_key
   or tag_value`) behind one helper; a progress-event seam so rich
   rendering lives only in aws_resource_inventory/cli.py (plus shrinking
