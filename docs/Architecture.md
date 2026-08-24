@@ -16,8 +16,9 @@ flowchart TD
     SVC --> ENG["aws_resource_inventory/lib/engine.py — pagination, concurrency, error policy"]
     ENG --> CL["aws_resource_inventory/lib/clients.py — the only boto3 client factory"]
     RG --> CL
-    R --> OUT["outputs.py — Resource records → table / JSON / Markdown"]
+    R --> OUT["outputs.py — Resource records → terminal table / Markdown"]
     T --> OUT
+    OUT --> ENV["aws_resource_inventory/lib/envelope.py — build_envelope: the one serialized JSON document"]
 ```
 
 Two paths, chosen by your flags:
@@ -42,7 +43,8 @@ Two paths, chosen by your flags:
 | `aws_resource_inventory/lib/clients.py` | Builds every boto3 client | Connection pool 50, adaptive retries, thread-safe creation |
 | `aws_resource_inventory/lib/records.py` | `Resource` — the typed record | Malformed records fail at construction, not at report time |
 | `aws_resource_inventory/lib/arn.py` | Extracts a resource id out of an observed ARN | The one home for ARN id extraction — both scan paths share it |
-| `aws_resource_inventory/lib/outputs.py` | Records → table / JSON / Markdown | Caller states the scan path via `source=` — never guessed |
+| `aws_resource_inventory/lib/envelope.py` | `build_envelope` — Resource records → the serialized JSON document | Pure: fixtures in, dict out. The caller owns the clock and the scan parameters |
+| `aws_resource_inventory/lib/outputs.py` | Records → envelope file + terminal table / Markdown | Caller states the scan path via `source=` — never guessed |
 | `aws_resource_inventory/lib/cache.py` | Pickle cache with 10-min TTL | Best-effort: any cache failure is just a miss |
 
 ## The data shape
@@ -50,7 +52,7 @@ Two paths, chosen by your flags:
 Every scanner returns `{result_key: [raw boto3 dicts]}` (for example
 `{"vpcs": [...], "subnets": [...]}`). Output processors turn those into
 `Resource` records — region, resource_name, resource_type, resource_id,
-resource_arn, arn_source — which all three output formats consume.
+resource_arn, arn_source — which every output format consumes.
 `resource_id` and `resource_arn` are always real values, never `"N/A"`:
 where AWS returns no ARN the processor constructs one from the
 `CallerIdentity` it is handed (account + partition), and `arn_source`
@@ -62,8 +64,32 @@ the `Name` tag) or null — never synthesized, never a copy of the id. The
 producer with tags to read and by the tag-scan processor, so the same
 `Name` tag yields the same name on either scan path. A name taken from a
 name *attribute* is service-path only: the Tagging API returns an ARN
-and tags, never the attribute (ADR-0005 Consequences). `to_record()`
-does not serialize `arn_source` yet.
+and tags, never the attribute (ADR-0005 Consequences).
+
+## The serialized shape
+
+Every scan writes one self-describing JSON document — the envelope
+(`schema_version` 1, ADR-0005), built by `lib/envelope.py`:
+scan metadata (tool, account, partition, regions, source, filters,
+`started_at`, `duration_seconds`), a summary (`total`, `by_region`,
+`by_type`), and `resources[]` sorted by region → type → id. Never a
+bare array: a file nobody can trace back to an account, a region set
+and a filter is not evidence.
+
+Serialization renames the record's keys to bare ones — `region`,
+`type`, `id`, `name`, `arn`, `arn_source`. The dataclass keeps its
+`resource_`-prefixed attribute names; only the JSON is bare. `name` is
+`null` when AWS supplies none.
+
+`by_region` is seeded from the scanned region list, so a region that
+returned nothing reports `0` instead of vanishing — the count is what
+makes a partially-failed scan visible. `by_type` is not seeded:
+resource types are discovered, not requested, and the tag path emits
+whatever AWS returns, so there is no list to seed from.
+
+`schema_version` bumps only on a breaking change — a renamed or removed
+key, a changed type, meaning, or sort order. Additive fields never bump
+it.
 
 One subtlety: tag-path results are a hybrid. Most sections are Tagging
 API shaped, but the merged Auto Scaling section carries raw service
@@ -76,8 +102,8 @@ through their registered processors instead of the generic one.
 1. The engine is a library the scanners call — not a framework that
    calls the scanners. Complicated scanners stay ordinary functions you
    can read top to bottom.
-2. One registry, one client factory, one record type. Each exists
-   exactly once; everything else uses them.
+2. One registry, one client factory, one record type, one output
+   schema. Each exists exactly once; everything else uses them.
 3. AWS errors are expected and degrade gracefully (empty key plus a
    warning). Anything else is a bug and is allowed to crash.
 4. Decisions live in `docs/adr/`; product direction lives in
@@ -99,4 +125,8 @@ through their registered processors instead of the generic one.
   (moto fakes AWS).
 - `scripts/e2e-diff.sh` — after merging, scans real AWS with the code
   before and after the merge and diffs the output. Run it plain and
-  with `--tag-key/--tag-value` (the two paths are different code).
+  with `--tag-key/--tag-value` (the two paths are different code). It
+  compares `.resources` only, sorted — `started_at` and
+  `duration_seconds` are non-deterministic by design — and refuses refs
+  that predate the envelope outright rather than guessing at a flat
+  array.

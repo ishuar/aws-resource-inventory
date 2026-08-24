@@ -142,6 +142,7 @@ class TestTagScanFlattensEndToEnd:
     ) -> None:
         import json
 
+        from aws_resource_inventory.lib.envelope import ScanFilters
         from aws_resource_inventory.lib.outputs import output_results
 
         create_tagged_fixtures(aws_session)
@@ -158,16 +159,22 @@ class TestTagScanFlattensEndToEnd:
             debug=False,
             identity=IDENTITY,
             source="tagging",
+            regions=[REGION],
+            filters=ScanFilters(
+                services=None, tag_key="env", tag_value="prod", all_services=False
+            ),
+            started_at="2026-08-23T09:14:22Z",
+            duration_seconds=1.5,
         )
 
-        records = {r["resource_type"]: r for r in json.loads(out.read_text())}
+        records = {r["type"]: r for r in json.loads(out.read_text())["resources"]}
         # RGTA side flattens generically with real ARN/id; S3 records use
         # the same s3:bucket vocabulary as the per-service scanner.
-        assert records["s3:bucket"]["resource_id"] == "tagged-bucket"
-        assert records["s3:bucket"]["resource_arn"] == "arn:aws:s3:::tagged-bucket"
+        assert records["s3:bucket"]["id"] == "tagged-bucket"
+        assert records["s3:bucket"]["arn"] == "arn:aws:s3:::tagged-bucket"
         # Merged autoscaling side flattens through its service processor —
         # the exact hand-off the regression mangled.
-        assert records["autoscaling:autoScalingGroup"]["resource_id"] == "prod-asg"
+        assert records["autoscaling:autoScalingGroup"]["id"] == "prod-asg"
         assert "launch_templates" not in records  # the mangled form must not exist
         assert count == len(records)
 

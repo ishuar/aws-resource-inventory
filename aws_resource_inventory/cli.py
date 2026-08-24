@@ -12,6 +12,7 @@ import signal
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,6 +29,8 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 from rich.table import Table
+
+from aws_resource_inventory.lib.envelope import ScanFilters
 
 # Import logging configuration
 from aws_resource_inventory.lib.logging import (
@@ -401,6 +404,9 @@ def scan_command(
     while True:
         scan_count += 1
         start_time = time.time()
+        # Captured per scan iteration: in refresh mode every scan writes
+        # its own envelope and must stamp its own start.
+        started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         if debug:
             logger.debug("Starting scan iteration #%d", scan_count)
@@ -528,53 +534,62 @@ def scan_command(
                 )
             break
 
-        # Handle scan results
+        # Handle scan results. A scan that found nothing still writes the
+        # envelope: it records who scanned what, when and with which
+        # filters (ADR-0005), and that evidence is worth as much as a
+        # non-empty result. Only the region summaries need resources.
         if not all_results:
             console.print(
                 "[yellow]⚪ No resources found matching the criteria.[/yellow]"
             )
-            if not refresh:
-                return
         else:
-            # Display region summaries after scanning is complete
             display_region_summaries(all_results, debug)
 
-            # Process results
-            current_output_file = _generate_output_filename(
-                output_file, tag_key, tag_value, region_list, services
-            )
+        current_output_file = _generate_output_filename(
+            output_file, tag_key, tag_value, region_list, services
+        )
 
-            # Check for shutdown before processing results
-            if shutdown_requested.is_set():
-                console.print(
-                    "[yellow]Skipping output generation due to shutdown request[/yellow]"
-                )
-                break
-
-            # Output results
-            if not refresh or scan_count == 1:
-                console.print("\n[bold green]Generating output...[/bold green]")
-
-            # The caller knows which scan path produced the results:
-            # tags or --all-services switch to the Resource Groups path.
-            scan_source: Literal["services", "tagging"] = (
-                "tagging"
-                if should_use_resource_groups_api(tag_key, tag_value, all_services)
-                else "services"
+        # Check for shutdown before processing results
+        if shutdown_requested.is_set():
+            console.print(
+                "[yellow]Skipping output generation due to shutdown request[/yellow]"
             )
-            resource_count = output_results(
-                all_results,
-                current_output_file,
-                output_format,
-                debug,
-                identity=caller_identity,
-                source=scan_source,
-            )
+            break
 
-            # Show scan completion status
-            _display_scan_completion(
-                refresh, scan_count, resource_count, all_results, scan_duration
-            )
+        # Output results
+        if not refresh or scan_count == 1:
+            console.print("\n[bold green]Generating output...[/bold green]")
+
+        # The caller knows which scan path produced the results:
+        # tags or --all-services switch to the Resource Groups path.
+        scan_source: Literal["services", "tagging"] = (
+            "tagging"
+            if should_use_resource_groups_api(tag_key, tag_value, all_services)
+            else "services"
+        )
+        scan_filters = ScanFilters(
+            services=None if scan_source == "tagging" else list(services),
+            tag_key=tag_key,
+            tag_value=tag_value,
+            all_services=all_services,
+        )
+        resource_count = output_results(
+            all_results,
+            current_output_file,
+            output_format,
+            debug,
+            identity=caller_identity,
+            source=scan_source,
+            regions=region_list,
+            filters=scan_filters,
+            started_at=started_at,
+            duration_seconds=round(scan_duration, 1),
+        )
+
+        # Show scan completion status
+        _display_scan_completion(
+            refresh, scan_count, resource_count, len(region_list), scan_duration
+        )
 
         # Exit if not in refresh mode
         if not refresh:
@@ -868,21 +883,27 @@ def _display_scan_completion(
     refresh: bool,
     scan_count: int,
     resource_count: int,
-    all_results: dict,
+    region_count: int,
     scan_duration: float,
 ) -> None:
-    """Display scan completion status."""
+    """Display scan completion status.
+
+    ``region_count`` is the regions asked for, not the regions that
+    returned something: a scan of two regions that found nothing still
+    scanned two regions.
+    """
+    plural = "s" if region_count != 1 else ""
+    summary = (
+        f"[green]📊 Found {resource_count} resources across "
+        f"{region_count} region{plural} in {scan_duration:.1f}s[/green]"
+    )
     if refresh:
         console.print(f"\n[bold green]🎉 Scan #{scan_count} completed![/bold green]")
-        console.print(
-            f"[green]📊 Found {resource_count} resources across {len(all_results)} region{'s' if len(all_results) > 1 else ''} in {scan_duration:.1f}s[/green]"
-        )
+        console.print(summary)
         console.print("[dim cyan]💡 Press Ctrl+C to stop refresh mode[/dim cyan]")
     else:
         console.print("\n[bold green]🎉 Scan completed successfully![/bold green]")
-        console.print(
-            f"[green]📊 Found {resource_count} resources across {len(all_results)} region{'s' if len(all_results) > 1 else ''} in {scan_duration:.1f}s[/green]"
-        )
+        console.print(summary)
 
 
 def _handle_refresh_continuation(
