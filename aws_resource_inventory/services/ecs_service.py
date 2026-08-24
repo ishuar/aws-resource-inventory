@@ -14,6 +14,7 @@ from typing import Any, cast
 
 from botocore.exceptions import BotoCoreError, ClientError
 
+from aws_resource_inventory.lib.arn import extract_resource_id_from_arn
 from aws_resource_inventory.lib.clients import get_scan_client
 from aws_resource_inventory.lib.engine import (
     ResourceList,
@@ -193,18 +194,24 @@ def process_ecs_output(
 
     # ECS Services
     for service in service_data.get("services", []):
-        service_name = service.get("serviceName")
         service_arn = service.get("serviceArn")
-        if not service_name or not service_arn:
+        # The id is the ARN's cluster/service path, read by the one
+        # shared extractor: serviceName alone repeats across clusters.
+        service_id = (
+            extract_resource_id_from_arn(service_arn, "ecs:service")
+            if service_arn
+            else None
+        )
+        if not service_arn or not service_id:
             _skip_missing_identity("ecs:service", region)
             continue
 
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=name_from_tags(service.get("tags"), service_name),
+                resource_name=name_from_tags(service.get("tags"), service_id),
                 resource_type="ecs:service",
-                resource_id=service_name,
+                resource_id=service_id,
                 resource_arn=service_arn,
                 arn_source="observed",
             )
