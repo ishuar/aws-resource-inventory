@@ -148,6 +148,7 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
             {
                 "FileSystemId": "fs-1",
                 "Name": "shared-data",
+                "Tags": [{"Key": "Name", "Value": "shared-data"}],
                 "FileSystemArn": "arn:aws:elasticfilesystem:eu-central-1:1:file-system/fs-1",
             }
         ],
@@ -494,7 +495,8 @@ def test_resource_names_are_pinned_per_producer() -> None:
         "ecs:service": None,
         "ecs:task-definition": None,
         "ecs:capacity-provider": None,
-        # efs: Name is a genuine attribute (surfaced from the Name tag).
+        # efs: AWS surfaces the Name tag as a Name field, but the tag
+        # itself is what we read, so the id-repeat guard applies.
         "efs:file-system": "shared-data",
         # rds: the identifier IS the id, so only a Name tag (RDS calls
         # the field TagList) can add anything.

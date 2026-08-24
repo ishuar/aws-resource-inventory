@@ -22,8 +22,23 @@ FS_NAMED = {
         ":file-system/fs-0123456789abcdef0"
     ),
     "Name": "shared-data",
+    "Tags": [{"Key": "Name", "Value": "shared-data"}],
     "SizeInBytes": {"Value": 6144},
     "NumberOfMountTargets": 2,
+}
+# AWS surfaces the Name tag as the Name field, so a file system tagged
+# with its own id arrives with Name == FileSystemId. That is an id copy,
+# not a name.
+FS_NAME_REPEATS_ID = {
+    "FileSystemId": "fs-00112233445566778",
+    "FileSystemArn": (
+        "arn:aws:elasticfilesystem:eu-central-1:123456789012"
+        ":file-system/fs-00112233445566778"
+    ),
+    "Name": "fs-00112233445566778",
+    "Tags": [{"Key": "Name", "Value": "fs-00112233445566778"}],
+    "SizeInBytes": {"Value": 0},
+    "NumberOfMountTargets": 0,
 }
 FS_UNNAMED = {
     "FileSystemId": "fs-0fedcba9876543210",
@@ -57,6 +72,9 @@ class TestScanEfs:
         assert "Value" in found["SizeInBytes"]
         assert "NumberOfMountTargets" in found
         assert found["NumberOfMountTargets"] == 0
+        # The name comes from Tags, not the Name field, so the shared
+        # reader applies its id-repeat guard here like everywhere else.
+        assert found["Tags"] == [{"Key": "Name", "Value": "shared-data"}]
 
     def test_empty_region_returns_all_keys_with_empty_lists(
         self, aws_session: Any
@@ -70,7 +88,10 @@ class TestProcessEfsOutput:
         flattened: list[Resource] = []
 
         process_efs_output(
-            {"file_systems": [FS_NAMED, FS_UNNAMED]}, REGION, flattened, IDENTITY
+            {"file_systems": [FS_NAMED, FS_UNNAMED, FS_NAME_REPEATS_ID]},
+            REGION,
+            flattened,
+            IDENTITY,
         )
 
         assert [r.to_record() for r in flattened] == [
@@ -82,12 +103,20 @@ class TestProcessEfsOutput:
                 "resource_arn": FS_NAMED["FileSystemArn"],
             },
             {
-                # No Name field: null, never a copy of the id.
+                # No Name tag: null, never a copy of the id.
                 "region": REGION,
                 "resource_name": None,
                 "resource_type": "efs:file-system",
                 "resource_id": "fs-0fedcba9876543210",
                 "resource_arn": FS_UNNAMED["FileSystemArn"],
+            },
+            {
+                # A Name tag that merely repeats the id is not a name.
+                "region": REGION,
+                "resource_name": None,
+                "resource_type": "efs:file-system",
+                "resource_id": "fs-00112233445566778",
+                "resource_arn": FS_NAME_REPEATS_ID["FileSystemArn"],
             },
         ]
 
