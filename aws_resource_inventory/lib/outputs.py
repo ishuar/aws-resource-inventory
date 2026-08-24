@@ -297,7 +297,6 @@ def output_results(
         table = create_aws_resources_table(flattened_resources, debug)
         console.print(table)
 
-        # Also save the envelope to file
         output_file.write_text(serialized)
         console.print(f"[green]Data also saved to {output_file}[/green]")
     elif output_format in ("md", "markdown"):

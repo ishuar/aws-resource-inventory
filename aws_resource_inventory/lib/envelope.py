@@ -73,7 +73,13 @@ def build_envelope(
         (resource.to_record() for resource in resources),
         key=lambda record: (record["region"], record["type"], record["id"]),
     )
-    by_region = Counter(record["region"] for record in records)
+    # by_region is seeded from `regions` so a scanned-but-empty region
+    # reports 0 rather than vanishing (ADR-0005: a partially-failed scan
+    # must stay visible). by_type cannot be seeded: resource types are
+    # discovered, not requested — the tagging path emits whatever AWS
+    # returns — so there is no input list to seed from.
+    by_region = Counter(dict.fromkeys(regions, 0))
+    by_region.update(record["region"] for record in records)
     by_type = Counter(record["type"] for record in records)
     return {
         "schema_version": SCHEMA_VERSION,

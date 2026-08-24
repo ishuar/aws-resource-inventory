@@ -319,6 +319,15 @@ the API or constructed from the caller identity), so the data loads
 straight into `jq`, pandas, or SQL. `schema_version` bumps only on
 breaking changes.
 
+`summary.by_region` names every region you scanned, reporting `0` for
+one that returned nothing — so a low count is visible rather than a
+missing line you have to notice. `summary.by_type` lists only the types
+actually found: types are discovered, not requested.
+
+A scan that finds nothing still writes the file. The envelope records
+which account, regions and filters were used, and that is evidence in
+its own right — "no resources found" is a result worth keeping.
+
 ### Advanced Options
 
 ```bash

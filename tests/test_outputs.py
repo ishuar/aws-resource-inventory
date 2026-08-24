@@ -187,7 +187,13 @@ class TestOutputResults:
         assert count == 0
         written = json.loads(out.read_text())
         assert written["resources"] == []
-        assert written["summary"] == {"total": 0, "by_region": {}, "by_type": {}}
+        # by_region names every scanned region even at zero — absence
+        # would be indistinguishable from "never scanned" (ADR-0005).
+        assert written["summary"] == {
+            "total": 0,
+            "by_region": {REGION: 0},
+            "by_type": {},
+        }
 
     def test_empty_service_data_is_skipped(self, tmp_path: Path) -> None:
         out = tmp_path / "scan.json"

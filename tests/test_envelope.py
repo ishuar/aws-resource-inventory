@@ -215,8 +215,49 @@ def test_summary_counts_the_emitted_resources() -> None:
 
 def test_empty_scan_still_produces_the_full_envelope() -> None:
     envelope = build([])
-    assert envelope["summary"] == {"total": 0, "by_region": {}, "by_type": {}}
+    # by_region is seeded from the scanned regions: a region that returned
+    # nothing reports 0, never absence (ADR-0005 — a partially-failed scan
+    # must stay visible).
+    assert envelope["summary"] == {
+        "total": 0,
+        "by_region": {REGION: 0},
+        "by_type": {},
+    }
     assert envelope["resources"] == []
+
+
+def test_by_region_reports_zero_for_a_scanned_but_empty_region() -> None:
+    # Two regions scanned, one produced nothing. The empty one must still
+    # appear — absence would be indistinguishable from "never scanned".
+    envelope = build(
+        [make_resource(region="eu-central-1")],
+        regions=["eu-central-1", "eu-west-1"],
+    )
+    assert envelope["summary"]["by_region"] == {"eu-central-1": 1, "eu-west-1": 0}
+
+
+def test_by_region_keeps_a_region_absent_from_the_scanned_list() -> None:
+    # Seeding adds regions, it never drops observed ones.
+    envelope = build(
+        [
+            make_resource(
+                region="us-east-1",
+                resource_arn="arn:aws:s3:::my-bucket-us",
+            )
+        ],
+        regions=["eu-central-1"],
+    )
+    assert envelope["summary"]["by_region"] == {"eu-central-1": 0, "us-east-1": 1}
+
+
+def test_by_type_is_never_seeded_with_zeros() -> None:
+    # Deliberate asymmetry with by_region: resource types are discovered,
+    # not requested. There is no input list to seed from — the tagging path
+    # emits whatever AWS returns — so absence is the only honest answer.
+    envelope = build([], regions=["eu-central-1", "eu-west-1"])
+    assert envelope["summary"]["by_type"] == {}
+    envelope = build([make_resource()], filters=NO_FILTERS)
+    assert 0 not in envelope["summary"]["by_type"].values()
 
 
 def test_absent_name_and_filters_serialize_as_json_null() -> None:
