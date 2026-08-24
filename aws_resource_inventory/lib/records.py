@@ -2,7 +2,8 @@
 The scan-record contract.
 
 ``Resource`` is the one definition of the flattened record every output
-processor produces and every output format (table, markdown, JSON)
+processor produces and every output format (the terminal table and
+the JSON envelope)
 consumes. Producers construct it — so a malformed record fails at
 construction, in the producing module, instead of at report time in a
 user's terminal.

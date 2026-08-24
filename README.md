@@ -6,13 +6,13 @@
 [![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![pre-commit.ci status](https://results.pre-commit.ci/badge/github/ishuar/aws-resource-inventory/main.svg)](https://results.pre-commit.ci/latest/github/ishuar/aws-resource-inventory/main)
 
-A comprehensive AWS multi-service scanner with tag-based filtering, parallel processing, advanced logging capabilities, and optimization features. This tool enables efficient discovery and analysis of AWS resources across multiple regions and services with intelligent caching, rich output formats, and detailed AWS API tracing.
+A comprehensive AWS multi-service scanner with tag-based filtering, parallel processing, advanced logging capabilities, and optimization features. This tool enables efficient discovery and analysis of AWS resources across multiple regions and services with intelligent caching, a self-describing JSON results document, and detailed AWS API tracing.
 
 ## Features
 
 - Scans eight AWS services — EC2, S3, ECS, EFS, VPC, RDS, ELB, and Auto Scaling — across multiple regions concurrently, with or without tag filters.
 - Discovers resources from 100+ AWS services via the Resource Groups Tagging API (`--all-services`, requires a tag filter).
-- Table, JSON, and Markdown output; results are rendered in the terminal and written to a file for further processing.
+- Results render as a terminal table and are always written as one self-describing JSON document — to a file, or to stdout with `--output -` for piping straight into `jq`.
 - Result caching with a 10-minute TTL (`--cache` / `--no-cache`).
 - Configurable parallelism per region (`--max-workers`) and per service (`--service-workers`), dry-run preview, continuous refresh mode, and graceful Ctrl+C handling.
 - Debug traces (`--debug`), full AWS API tracing (`--verbose`), and custom log files (`--log-file`) — see [Logging Architecture](docs/LOGGING_ARCHITECTURE.md).
@@ -257,25 +257,28 @@ aws-inventory scan --tag-key app --tag-value web-server
 aws-inventory scan --regions us-east-1 --tag-key CostCenter --tag-value Engineering
 ```
 
-### Output Formats
+### Output
+
+Every scan renders a table in the terminal and writes the JSON results
+document. `--output` controls where the document goes:
 
 ```bash
-# Default table format (human-readable)
-aws-inventory scan --format table
+# Table in the terminal, JSON document at an auto-generated path
+aws-inventory scan
 
-# JSON format for programmatic processing
-aws-inventory scan --format json --output results.json
+# Choose the file path
+aws-inventory scan --output results.json
 
-# Markdown format for documentation
-aws-inventory scan --format md --output report.md
+# Stream the document to stdout instead — every other line is
+# suppressed, so it pipes cleanly into jq; nothing is written to disk
+aws-inventory scan --output - | jq '.summary'
 
-# Export filtered results to JSON
-aws-inventory scan --tag-key Environment --tag-value Production --format json --output prod-resources.json
+# Export filtered results
+aws-inventory scan --tag-key Environment --tag-value Production --output prod-resources.json
 ```
 
-The JSON file (also written by the table format) is one self-describing
-document — scan metadata, a summary, and the flat `resources` array,
-sorted by region → type → id:
+The JSON document is self-describing — scan metadata, a summary, and the
+flat `resources` array, sorted by region → type → id:
 
 ```json
 {
@@ -353,17 +356,17 @@ aws-inventory --verbose scan --debug --max-workers 1 --service ec2
 # Production infrastructure audit with comprehensive logging
 aws-inventory --verbose --log-file prod-audit.log scan \
     --debug --tag-key Environment --tag-value Production \
-    --format json --output production-audit.json
+    --output production-audit.json
 
-# Regional compliance check with detailed tracing
-aws-inventory --verbose --log-file compliance-trace.log scan \
-    --debug --regions eu-west-1,eu-central-1 \
-    --service ec2 --format md --output eu-compliance-report.md
+# Regional compliance check, piped straight into jq
+aws-inventory scan \
+    --regions eu-west-1,eu-central-1 --service ec2 \
+    --output - | jq '.resources[] | select(.name == null)'
 
 # Application-specific resource discovery across all AWS services
 aws-inventory scan \
     --all-services --tag-key Application --tag-value MyApp \
-    --format table --regions us-east-1
+    --regions us-east-1
 
 # Development environment troubleshooting with verbose logging
 aws-inventory --verbose --log-file dev-debug.log scan \
@@ -436,7 +439,7 @@ aws-resource-inventory/
 │   │   ├── arn.py                   # ARN id extraction shared by both scan paths
 │   │   ├── clients.py               # The only boto3 client factory (pooling, adaptive retries)
 │   │   ├── scan.py                  # Region/service scan orchestration + caching hooks
-│   │   ├── outputs.py               # Table / JSON / Markdown output processing
+│   │   ├── outputs.py               # Table rendering + JSON envelope output
 │   │   ├── resource_groups_utils.py # Resource Groups Tagging API path (--all-services, tags)
 │   │   ├── cache.py                 # Result caching with TTL
 │   │   └── logging.py               # Unified logging with AWS API tracing
@@ -480,7 +483,7 @@ poetry run pytest
 # Run one test file
 poetry run pytest tests/test_engine.py
 
-# Quick smoke checks (help, dry-run, formats)
+# Quick smoke checks (help, dry-run, stdout JSON, error handling)
 ./run_quick_tests.sh
 ```
 
@@ -562,7 +565,7 @@ aws-inventory scan --all-services --tag-key Environment --tag-value Production
 
 # Production audit with comprehensive logging
 aws-inventory --verbose --log-file audit.log scan --debug \
-    --tag-key Environment --tag-value Production --format json --output audit.json
+    --tag-key Environment --tag-value Production --output audit.json
 ```
 
 ### Flag Combinations Guide

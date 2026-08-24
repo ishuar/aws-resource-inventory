@@ -155,7 +155,6 @@ class TestTagScanFlattensEndToEnd:
         count = output_results(
             {REGION: results},
             out,
-            "json",
             debug=False,
             identity=IDENTITY,
             source="tagging",

@@ -1,12 +1,11 @@
 """
 Outputs module for AWS Scanner
 
-Handles formatting and output of scan results in various formats (JSON, table, markdown).
+Flattens scan results into Resource records, renders the terminal table,
+and writes the JSON envelope (to a file, or to stdout with --output -).
 """
 
 import json
-from collections import Counter
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -82,89 +81,6 @@ def ensure_output_directory(output_file: Path) -> None:
             raise
 
 
-def generate_markdown_summary(
-    flattened_resources: list[Resource], results: dict[str, Any]
-) -> str:
-    """Generate a markdown summary report from scan results."""
-    md_content = []
-
-    # Header
-    md_content.append("# AWS Resources Scan Report")
-    md_content.append(
-        f"\n**Generated:** {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-    md_content.append(f"**Total Resources:** {len(flattened_resources)}")
-
-    # Summary by region
-    md_content.append("\n## Summary by Region")
-    region_counts = Counter(r.region for r in flattened_resources)
-    for region, count in sorted(region_counts.items()):
-        md_content.append(f"- **{region}**: {count} resources")
-
-    # Summary by service (extracted from resource_type)
-    md_content.append("\n## Summary by Service")
-    service_counts = Counter(r.service for r in flattened_resources)
-    for service, count in sorted(service_counts.items()):
-        md_content.append(f"- **{service.upper()}**: {count} resources")
-
-    # Summary by resource type
-    md_content.append("\n## Summary by Resource Type")
-    type_counts = Counter(r.resource_type for r in flattened_resources)
-    for resource_type, count in sorted(type_counts.items()):
-        md_content.append(f"- **{resource_type}**: {count}")
-
-    # Detailed breakdown by region and service
-    md_content.append("\n## Detailed Resources")
-
-    for region in sorted(region_counts.keys()):
-        region_resources = [r for r in flattened_resources if r.region == region]
-        if not region_resources:
-            continue
-
-        md_content.append(f"\n### {region}")
-
-        # Group by service within region (extracted from resource_type)
-        region_services: dict[str, list[Resource]] = {}
-        for resource in region_resources:
-            service = resource.service
-            if service not in region_services:
-                region_services[service] = []
-            region_services[service].append(resource)
-
-        for service in sorted(region_services.keys()):
-            service_resources = region_services[service]
-            md_content.append(
-                f"\n#### {service.upper()} ({len(service_resources)} resources)"
-            )
-
-            md_content.append("| Resource Name | Type | ID | ARN |")
-            md_content.append("|---------------|------|----|----|")
-
-            for resource in sorted(
-                service_resources,
-                key=lambda x: x.resource_name or x.resource_id,
-            ):
-                name = (resource.resource_name or resource.resource_id).replace(
-                    "|", "\\|"
-                )  # Escape pipes
-                resource_type = resource.resource_type.replace("|", "\\|")
-                resource_id = resource.resource_id.replace("|", "\\|")
-                arn = resource.resource_arn.replace("|", "\\|")
-
-                # Format ID and ARN with code blocks for better readability
-                # (every record carries a real id and ARN — "N/A" is gone).
-                md_content.append(
-                    f"| {name} | {resource_type} | `{resource_id}` | `{arn}` |"
-                )
-
-    # Add scan metadata
-    md_content.append("\n## Scan Metadata")
-    md_content.append("- **Tool**: AWS Resource Inventory")
-    md_content.append("- **Version**: Modular Version with Advanced Optimizations")
-
-    return "\n".join(md_content)
-
-
 def process_generic_service_output(
     service_data: dict[str, Any],
     region: str,
@@ -222,8 +138,7 @@ def process_generic_service_output(
 
 def output_results(
     results: dict[str, Any],
-    output_file: Path,
-    output_format: str,
+    output_file: Path | None,
     debug: bool,
     *,
     identity: CallerIdentity,
@@ -233,7 +148,12 @@ def output_results(
     started_at: str,
     duration_seconds: float,
 ) -> int:
-    """Process results using modular output processors and format for output.
+    """Flatten results, render the table, and write the JSON envelope.
+
+    ``output_file`` is where the envelope document lands. ``None`` means
+    stdout mode (``--output -``): the document is printed to stdout and
+    nothing touches the disk — the table and every decorative console
+    line are suppressed by the CLI so the output pipes cleanly into jq.
 
     ``identity`` is the scanning caller's account + partition (from STS);
     processors need it to construct the ARNs the AWS APIs do not return.
@@ -276,9 +196,6 @@ def output_results(
                         service_data, region, flattened_resources, identity
                     )
 
-    # Ensure output directory exists before writing files
-    ensure_output_directory(output_file)
-
     # Every serialized scan is the self-describing envelope document
     # (schema_version 1, ADR-0005) — never a bare resource array.
     envelope = build_envelope(
@@ -293,47 +210,16 @@ def output_results(
     )
     serialized = json.dumps(envelope, indent=2)
 
-    # Output in the requested format
-    if output_format == "json":
-        output_file.write_text(serialized)
-        console.print(f"[green]Results saved to {output_file}[/green]")
-        # Also print to console for immediate viewing
-        console.print(serialized)
-    elif output_format == "table":
-        # Create and display the standardized table
+    if output_file is None:
+        # --output -: the document owns stdout. Plain print, not a rich
+        # console (which could wrap or highlight), keeps it jq-clean.
+        print(serialized)
+    else:
         table = create_aws_resources_table(flattened_resources, debug, identity)
         console.print(table)
 
+        ensure_output_directory(output_file)
         output_file.write_text(serialized)
         console.print(f"[green]Data also saved to {output_file}[/green]")
-    elif output_format in ("md", "markdown"):
-        # Generate markdown summary report
-        markdown_content = generate_markdown_summary(flattened_resources, results)
-
-        # Change extension to .md for markdown files
-        md_output_file = output_file.with_suffix(".md")
-        # Ensure directory exists for markdown file (might have different path)
-        ensure_output_directory(md_output_file)
-        md_output_file.write_text(markdown_content)
-        console.print(f"[green]Markdown report saved to {md_output_file}[/green]")
-
-        # Display the table view in terminal as well
-        console.print("\n[bold blue]Resource Table View:[/bold blue]")
-        table = create_aws_resources_table(flattened_resources, debug, identity)
-        console.print(table)
-
-        # Also display a summary in console
-        console.print("\n[bold blue]Markdown Summary Generated:[/bold blue]")
-        console.print(f"Total resources: {len(flattened_resources)}")
-
-        # Count by service (extracted from resource_type)
-        service_counts = Counter(r.service for r in flattened_resources)
-        for service, count in service_counts.items():
-            console.print(f"  {service}: {count} resources")
-
-    else:
-        console.print(
-            f"[red]Unknown output format '{output_format}'. Supported: json, table, md or markdown[/red]"
-        )
 
     return len(flattened_resources)

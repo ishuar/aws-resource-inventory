@@ -51,7 +51,6 @@ def render_config_panel(monkeypatch: Any, **overrides: Any) -> str:
         "use_cache": True,
         "refresh": False,
         "refresh_interval": 10,
-        "output_format": "table",
         "aws_profile": "test-profile",
         "debug": False,
     }
