@@ -554,9 +554,58 @@ def test_identity_fields_per_producer() -> None:
 
     ecs_records = {r["type"]: r for r in flatten("ecs")}
     assert ecs_records["ecs:task-definition"]["id"] == "api:3"
+    # ECS service ids are the cluster/service path AWS puts in the ARN,
+    # for the same reason as ELBv2: the trailing segment alone is not an
+    # identity.
+    assert ecs_records["ecs:service"]["id"] == "prod/api"
 
     asg_records = {r["type"]: r for r in flatten("autoscaling")}
     assert asg_records["autoscaling:launch-template"]["id"] == "lt-1"
+
+
+def test_same_service_name_in_two_clusters_yields_two_distinct_records() -> None:
+    # The collision the cluster segment exists to prevent. Without it
+    # both services flatten to the same (region, type, id) triple, which
+    # is also the envelope's sort key — so the records are
+    # indistinguishable and their order stops being deterministic.
+    data = {
+        "services": [
+            {
+                "serviceName": "api",
+                "serviceArn": "arn:aws:ecs:eu-central-1:1:service/prod/api",
+            },
+            {
+                "serviceName": "api",
+                "serviceArn": "arn:aws:ecs:eu-central-1:1:service/staging/api",
+            },
+        ]
+    }
+    resources: list[Resource] = []
+    PROCESSORS["ecs"](data, REGION, resources, IDENTITY)
+
+    ids = sorted(r.resource_id for r in resources)
+    assert ids == ["prod/api", "staging/api"]
+    assert len({(r.region, r.resource_type, r.resource_id) for r in resources}) == 2
+
+
+def test_ecs_service_name_tag_is_a_name_now_that_the_id_is_the_path() -> None:
+    # name_from_tags drops a Name tag that merely repeats the id. The id
+    # is the cluster/service path, so a service tagged Name=api reports
+    # that name instead of null — the tag is no longer a copy of the id.
+    data = {
+        "services": [
+            {
+                "serviceName": "api",
+                "serviceArn": "arn:aws:ecs:eu-central-1:1:service/prod/api",
+                "tags": [{"key": "Name", "value": "api"}],
+            }
+        ]
+    }
+    resources: list[Resource] = []
+    PROCESSORS["ecs"](data, REGION, resources, IDENTITY)
+
+    assert resources[0].resource_id == "prod/api"
+    assert resources[0].resource_name == "api"
 
 
 def test_resource_missing_its_id_is_skipped_not_emitted_as_na() -> None:

@@ -223,9 +223,12 @@ reintroduce them.
   caller's own STS ARN by `validate_aws_credentials` — never hardcode
   the partition) using formats verified against the AWS Service
   Authorization Reference; every record states `arn_source`
-  ("observed" | "constructed"). ELBv2 ids are extracted from observed
-  ARNs by `aws_resource_inventory/lib/arn.py`, the one home of ARN id
-  extraction for both scan paths. An unidentifiable raw dict is skipped
+  ("observed" | "constructed"). Ids are extracted from observed ARNs by
+  `aws_resource_inventory/lib/arn.py`, the one home of ARN id extraction
+  for both scan paths — no processor hand-rolls one. Where AWS's own ARN
+  format is a path the id keeps everything after the resource-type
+  segment, never the last slash (`PATH_SHAPED_IDS`, ADR-0006: ELBv2 and
+  `ecs:service`). An unidentifiable raw dict is skipped
   with a log line, never emitted. Valid credentials are therefore
   required to produce output (the old show-cached-anyway fallback is
   gone).

@@ -85,6 +85,24 @@ class TestExtractResourceId:
             == "app/my-alb/50dc6c495c0c9188/f2f7dc8efc522ab2/9683b2d02a6cabee"
         )
 
+    def test_ecs_service_keeps_the_cluster_and_service_path(self) -> None:
+        # AWS's own format is service/${ClusterName}/${ServiceName}, so
+        # the id is the whole path after the resource-type segment. The
+        # service name alone is not unique: the same name may exist in
+        # any number of clusters.
+        arn = "arn:aws:ecs:eu-central-1:111122223333:service/prod-cluster/api"
+        assert extract_resource_id_from_arn(arn, "ecs:service") == "prod-cluster/api"
+
+    def test_ecs_cluster_id_is_still_the_last_segment(self) -> None:
+        # cluster/${ClusterName} — single segment, unchanged.
+        arn = "arn:aws:ecs:eu-central-1:111122223333:cluster/prod-cluster"
+        assert extract_resource_id_from_arn(arn, "ecs:cluster") == "prod-cluster"
+
+    def test_ecs_task_definition_id_is_still_family_and_revision(self) -> None:
+        # task-definition/${Family}:${Revision} — single segment, unchanged.
+        arn = "arn:aws:ecs:eu-central-1:111122223333:task-definition/api:3"
+        assert extract_resource_id_from_arn(arn, "ecs:task-definition") == "api:3"
+
     def test_generic_slash_resource_takes_last_segment(self) -> None:
         arn = "arn:aws:ec2:eu-central-1:111122223333:instance/i-0abcd1234"
         assert extract_resource_id_from_arn(arn, "ec2:instance") == "i-0abcd1234"
