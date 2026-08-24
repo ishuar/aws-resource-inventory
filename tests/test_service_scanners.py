@@ -253,6 +253,29 @@ class TestScanElb:
         assert len(result["listener_rules"]) >= 1
         assert result["listener_rules"][0]["LoadBalancerArn"] == lb_arn
 
+    def test_listeners_carry_their_tags(self, aws_session: Any) -> None:
+        # A listener's only possible name is its Name tag, so a scan that
+        # never fetches tags reports it nameless while the tag scan names
+        # it (ADR-0005 §4). Rules take the same code path; moto's add_tags
+        # rejects rule ARNs, so the rule half is pinned at the processor
+        # seam in tests/test_resource_shape.py instead.
+        lb_arn = self._create_alb(aws_session)
+        elbv2 = aws_session.client("elbv2", region_name=REGION)
+        listener_arn = elbv2.describe_listeners(LoadBalancerArn=lb_arn)["Listeners"][0][
+            "ListenerArn"
+        ]
+        elbv2.add_tags(
+            ResourceArns=[listener_arn], Tags=[{"Key": "Name", "Value": "public-http"}]
+        )
+
+        result = scan_elb(aws_session, REGION)
+
+        assert result["listeners"][0]["Tags"] == [
+            {"Key": "Name", "Value": "public-http"}
+        ]
+        # Rules are fetched too, so the key is always present.
+        assert result["listener_rules"][0]["Tags"] == []
+
     def test_empty_region_yields_empty_lists(self, aws_session: Any) -> None:
         result = scan_elb(aws_session, REGION)
         assert result["load_balancers"] == []
@@ -302,6 +325,31 @@ class TestScanEcs:
         assert [
             td["taskDefinitionArn"].split("/")[-1] for td in result["task_definitions"]
         ] == ["api:1"]
+
+    def test_capacity_providers_are_requested_with_their_tags(
+        self, aws_session: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # moto returns a capacity provider's tags whether or not they were
+        # asked for; real AWS returns them only when include=["TAGS"] is
+        # sent. Pin the request itself, or the Name tag silently vanishes
+        # in production while every test stays green.
+        from moto.ecs.responses import EC2ContainerServiceResponse
+
+        requested: list[Any] = []
+        original = EC2ContainerServiceResponse.describe_capacity_providers
+
+        def recording(self: Any) -> Any:
+            requested.append(self._get_param("include"))
+            return original(self)
+
+        monkeypatch.setattr(
+            EC2ContainerServiceResponse, "describe_capacity_providers", recording
+        )
+        aws_session.client("ecs", region_name=REGION).create_cluster(clusterName="prod")
+
+        scan_ecs(aws_session, REGION)
+
+        assert requested == [["TAGS"]]
 
     def test_only_the_latest_two_task_definition_revisions_are_kept(
         self, aws_session: Any

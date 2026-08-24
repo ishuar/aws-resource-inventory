@@ -17,7 +17,7 @@ from aws_resource_inventory.services.registry import SERVICES
 
 from .arn import extract_resource_id_from_arn
 from .logging import get_logger
-from .records import CallerIdentity, Resource
+from .records import CallerIdentity, Resource, name_from_tags
 from .resource_groups_utils import SERVICE_SHAPED_SECTIONS
 
 logger = get_logger()
@@ -171,6 +171,10 @@ def process_generic_service_output(
     ARN here was returned by the Tagging API, so arn_source is "observed";
     a record without a usable ARN cannot be identified and is skipped with
     a log line — never emitted as "N/A".
+
+    The Tagging API returns every resource's tags, so the Name tag is read
+    with the same helper the per-service scanners use: a Name-tagged
+    resource reports the same name whichever path found it.
     """
     for resource_type_key, resources in service_data.items():
         if not isinstance(resources, list):
@@ -198,6 +202,7 @@ def process_generic_service_output(
             flattened_resources.append(
                 Resource(
                     region=region,
+                    resource_name=name_from_tags(resource.get("Tags"), resource_id),
                     # Already in service:type format from Resource Groups API
                     resource_type=resource_type,
                     resource_id=resource_id,

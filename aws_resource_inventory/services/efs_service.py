@@ -17,7 +17,11 @@ from typing import Any
 from aws_resource_inventory.lib.clients import get_scan_client
 from aws_resource_inventory.lib.engine import Describe, ScanResult, scan_keyed
 from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import CallerIdentity, Resource
+from aws_resource_inventory.lib.records import (
+    CallerIdentity,
+    Resource,
+    name_from_tags,
+)
 
 logger = get_logger()
 
@@ -38,7 +42,14 @@ def process_efs_output(
     flattened_resources: list[Resource],
     identity: CallerIdentity,
 ) -> None:
-    """Process EFS scan results for output formatting."""
+    """Process EFS scan results for output formatting.
+
+    EFS has no name of its own: describe_file_systems surfaces the Name
+    tag as a ``Name`` field and returns the tag itself under ``Tags``.
+    The tag is what we read, so EFS gets the same id-repeat guard as
+    every other producer — a file system tagged with its own id has no
+    name (ADR-0005 §4).
+    """
     for fs in service_data.get("file_systems", []):
         fs_id = fs.get("FileSystemId")
         fs_arn = fs.get("FileSystemArn")
@@ -49,7 +60,7 @@ def process_efs_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=fs.get("Name", fs_id),
+                resource_name=name_from_tags(fs.get("Tags"), fs_id),
                 resource_type="efs:file-system",
                 resource_id=fs_id,
                 resource_arn=fs_arn,

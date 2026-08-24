@@ -17,7 +17,11 @@ from typing import Any
 from aws_resource_inventory.lib.clients import get_scan_client
 from aws_resource_inventory.lib.engine import Describe, ScanResult, scan_keyed
 from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import CallerIdentity, Resource
+from aws_resource_inventory.lib.records import (
+    CallerIdentity,
+    Resource,
+    name_from_tags,
+)
 
 logger = get_logger()
 
@@ -52,7 +56,9 @@ def process_vpc_output(
     Except for subnets, the EC2 API returns no ARNs for VPC resources,
     so ARNs are constructed with the documented type segments (AWS
     Service Authorization Reference); VPC resources live under the
-    "ec2" ARN service.
+    "ec2" ARN service. None of these APIs supply a name attribute, so
+    the Name tag every describe_* response carries is the only name
+    source — never a CIDR block or an id dressed up as a name.
     """
 
     def constructed_arn(arn_type_segment: str, resource_id: str) -> str:
@@ -74,12 +80,10 @@ def process_vpc_output(
         if not vpc_id:
             skip_missing_id("vpc:vpc")
             continue
-        cidr_block = vpc.get("CidrBlock", "N/A")
-
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=f"VPC-{cidr_block}",
+                resource_name=name_from_tags(vpc.get("Tags"), vpc_id),
                 resource_type="vpc:vpc",
                 resource_id=vpc_id,
                 resource_arn=constructed_arn("vpc", vpc_id),
@@ -93,7 +97,6 @@ def process_vpc_output(
         if not subnet_id:
             skip_missing_id("vpc:subnet")
             continue
-        cidr_block = subnet.get("CidrBlock", "N/A")
         # describe_subnets is the one VPC call that returns an ARN; keep
         # it when present, construct the same documented format otherwise.
         subnet_arn = subnet.get("SubnetArn")
@@ -101,7 +104,7 @@ def process_vpc_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=f"Subnet-{cidr_block}",
+                resource_name=name_from_tags(subnet.get("Tags"), subnet_id),
                 resource_type="vpc:subnet",
                 resource_id=subnet_id,
                 resource_arn=subnet_arn or constructed_arn("subnet", subnet_id),
@@ -119,7 +122,7 @@ def process_vpc_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=nat_gw_id,
+                resource_name=name_from_tags(nat_gw.get("Tags"), nat_gw_id),
                 resource_type="vpc:natgateway",
                 resource_id=nat_gw_id,
                 resource_arn=constructed_arn("natgateway", nat_gw_id),
@@ -137,7 +140,7 @@ def process_vpc_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=igw_id,
+                resource_name=name_from_tags(igw.get("Tags"), igw_id),
                 resource_type="vpc:internet-gateway",
                 resource_id=igw_id,
                 resource_arn=constructed_arn("internet-gateway", igw_id),
@@ -155,7 +158,7 @@ def process_vpc_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=rt_id,
+                resource_name=name_from_tags(rt.get("Tags"), rt_id),
                 resource_type="vpc:route-table",
                 resource_id=rt_id,
                 resource_arn=constructed_arn("route-table", rt_id),
@@ -173,7 +176,7 @@ def process_vpc_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=dhcp_id,
+                resource_name=name_from_tags(dhcp.get("Tags"), dhcp_id),
                 resource_type="vpc:dhcp-options",
                 resource_id=dhcp_id,
                 resource_arn=constructed_arn("dhcp-options", dhcp_id),
@@ -191,7 +194,7 @@ def process_vpc_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=peering_id,
+                resource_name=name_from_tags(peering.get("Tags"), peering_id),
                 resource_type="vpc:vpc-peering-connection",
                 resource_id=peering_id,
                 resource_arn=constructed_arn("vpc-peering-connection", peering_id),
@@ -205,12 +208,10 @@ def process_vpc_output(
         if not endpoint_id:
             skip_missing_id("vpc:vpc-endpoint")
             continue
-        service_name = endpoint.get("ServiceName", "N/A")
-
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=f"{endpoint_id}-{service_name.split('.')[-1] if service_name != 'N/A' else 'unknown'}",
+                resource_name=name_from_tags(endpoint.get("Tags"), endpoint_id),
                 resource_type="vpc:vpc-endpoint",
                 resource_id=endpoint_id,
                 resource_arn=constructed_arn("vpc-endpoint", endpoint_id),

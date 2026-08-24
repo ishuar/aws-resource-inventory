@@ -23,7 +23,11 @@ from aws_resource_inventory.lib.engine import (
     map_parallel,
 )
 from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import CallerIdentity, Resource
+from aws_resource_inventory.lib.records import (
+    CallerIdentity,
+    Resource,
+    name_from_tags,
+)
 
 logger = get_logger()
 
@@ -134,12 +138,13 @@ def scan_ecs(session: Any, region: str) -> ScanResult:
 
         if result["clusters"]:
             try:
-                # describe_capacity_providers has no paginator.
-                result[
-                    "capacity_providers"
-                ] = ecs_client.describe_capacity_providers().get(
-                    "capacityProviders", []
-                )
+                # describe_capacity_providers has no paginator, and it
+                # returns tags only when include asks for them — without
+                # this a Name-tagged provider is nameless under `scan`
+                # and named under `scan --tag-key`.
+                result["capacity_providers"] = ecs_client.describe_capacity_providers(
+                    include=["TAGS"]
+                ).get("capacityProviders", [])
             except (ClientError, BotoCoreError) as e:
                 logger.warning("Could not list capacity providers: %s", e)
 
@@ -159,7 +164,14 @@ def process_ecs_output(
     flattened_resources: list[Resource],
     identity: CallerIdentity,
 ) -> None:
-    """Process ECS scan results for output formatting."""
+    """Process ECS scan results for output formatting.
+
+    Every ECS resource's AWS name IS its resource_id, so a Name tag is
+    the only thing that can add a name. Tags arrive under "tags" (ECS's
+    lowercase key/value shape): the scanner attaches them from
+    list_tags_for_resource for clusters, services and task definitions,
+    and capacity providers return theirs inline.
+    """
     # ECS Clusters
     for cluster in service_data.get("clusters", []):
         cluster_name = cluster.get("clusterName")
@@ -171,6 +183,7 @@ def process_ecs_output(
         flattened_resources.append(
             Resource(
                 region=region,
+                resource_name=name_from_tags(cluster.get("tags"), cluster_name),
                 resource_type="ecs:cluster",
                 resource_id=cluster_name,
                 resource_arn=cluster_arn,
@@ -189,6 +202,7 @@ def process_ecs_output(
         flattened_resources.append(
             Resource(
                 region=region,
+                resource_name=name_from_tags(service.get("tags"), service_name),
                 resource_type="ecs:service",
                 resource_id=service_name,
                 resource_arn=service_arn,
@@ -207,6 +221,7 @@ def process_ecs_output(
         flattened_resources.append(
             Resource(
                 region=region,
+                resource_name=name_from_tags(task_def.get("tags"), task_def_name),
                 resource_type="ecs:task-definition",  # Unified format: service:type
                 resource_id=task_def_name,
                 resource_arn=task_def_arn,
@@ -225,6 +240,7 @@ def process_ecs_output(
         flattened_resources.append(
             Resource(
                 region=region,
+                resource_name=name_from_tags(cp.get("tags"), cp_name),
                 resource_type="ecs:capacity-provider",  # Unified format: service:type
                 resource_id=cp_name,
                 resource_arn=cp_arn,

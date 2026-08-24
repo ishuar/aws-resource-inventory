@@ -5,10 +5,15 @@ This is the contract every consumer (table, markdown, JSON, diff) reads:
 exactly these keys, a real id and a real ARN on every record — never
 "N/A". ARNs the AWS API does not return are constructed from the caller
 identity (account + partition) using the documented per-type formats, and
-every record states whether its ARN was observed or constructed. Any
-change to the shape is a deliberate decision, not an accident.
+every record states whether its ARN was observed or constructed.
+resource_name is a name AWS itself supplies (a Name/name attribute or
+the Name tag, read by lib.records.name_from_tags on both scan paths) or
+None — never synthesized, never an id copy — and the key is always
+serialized. Any change to the shape is a deliberate decision, not an
+accident.
 """
 
+import re
 from typing import Any
 
 import pytest
@@ -24,7 +29,24 @@ REGION = "eu-central-1"
 IDENTITY = CallerIdentity(account="111122223333", partition="aws")
 GOV_IDENTITY = CallerIdentity(account="111122223333", partition="aws-us-gov")
 
-REQUIRED_KEYS = {"region", "resource_type", "resource_id", "resource_arn"}
+REQUIRED_KEYS = {
+    "region",
+    "resource_name",
+    "resource_type",
+    "resource_id",
+    "resource_arn",
+}
+
+# The synthesized-name patterns this tool used to invent. Deleted
+# deliberately: a resource_name is a name AWS itself supplies (a
+# Name/name attribute or the Name tag) or None — never fabricated.
+BANNED_INVENTED_NAME_PATTERNS = (
+    r"^VPC-",  # VPC-{cidr}
+    r"^Subnet-",  # Subnet-{cidr}
+    r"^vpce-.*-",  # {endpoint id}-{service suffix}
+    r"^[A-Z]+:\d+$",  # ELB listener {protocol}:{port}
+    r"^Rule-",  # ELB rule Rule-{priority}
+)
 
 # Representative boto3-shaped fixtures, one resource per key the scanner emits.
 SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
@@ -33,19 +55,34 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
         "volumes": [{"VolumeId": "vol-1", "Tags": []}],
         "security_groups": [{"GroupId": "sg-1", "GroupName": "default"}],
         "amis": [{"ImageId": "ami-1", "Name": "golden"}],
-        "snapshots": [{"SnapshotId": "snap-1", "Description": "backup"}],
+        "snapshots": [
+            {
+                "SnapshotId": "snap-1",
+                "Description": "backup",
+                "Tags": [{"Key": "Name", "Value": "nightly"}],
+            }
+        ],
     },
     "s3": {"buckets": [{"Name": "my-bucket"}]},
     "vpc": {
-        "vpcs": [{"VpcId": "vpc-1", "CidrBlock": "10.0.0.0/16"}],
+        "vpcs": [
+            {
+                "VpcId": "vpc-1",
+                "CidrBlock": "10.0.0.0/16",
+                "Tags": [{"Key": "Name", "Value": "prod"}],
+            }
+        ],
         "subnets": [
             {
                 "SubnetId": "subnet-1",
                 "CidrBlock": "10.0.1.0/24",
                 "SubnetArn": "arn:aws:ec2:eu-central-1:111122223333:subnet/subnet-1",
+                "Tags": [{"Key": "Name", "Value": "prod-public-a"}],
             }
         ],
-        "nat_gateways": [{"NatGatewayId": "nat-1"}],
+        "nat_gateways": [
+            {"NatGatewayId": "nat-1", "Tags": [{"Key": "Name", "Value": "egress"}]}
+        ],
         "internet_gateways": [{"InternetGatewayId": "igw-1"}],
         "route_tables": [{"RouteTableId": "rtb-1"}],
         "dhcp_options": [{"DhcpOptionsId": "dopt-1"}],
@@ -87,6 +124,7 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
             {
                 "clusterName": "prod",
                 "clusterArn": "arn:aws:ecs:eu-central-1:1:cluster/prod",
+                "tags": [{"key": "Name", "value": "Production"}],
             }
         ],
         "services": [
@@ -110,6 +148,7 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
             {
                 "FileSystemId": "fs-1",
                 "Name": "shared-data",
+                "Tags": [{"Key": "Name", "Value": "shared-data"}],
                 "FileSystemArn": "arn:aws:elasticfilesystem:eu-central-1:1:file-system/fs-1",
             }
         ],
@@ -119,6 +158,7 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
             {
                 "DBInstanceIdentifier": "app-db",
                 "DBInstanceArn": "arn:aws:rds:eu-central-1:1:db:app-db",
+                "TagList": [{"Key": "Name", "Value": "orders primary"}],
             }
         ],
         "db_clusters": [
@@ -145,6 +185,9 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
             {
                 "AutoScalingGroupName": "web-asg",
                 "AutoScalingGroupARN": "arn:aws:autoscaling:eu-central-1:1:autoScalingGroup:x:autoScalingGroupName/web-asg",
+                # The ASG Name tag mirrors the group name: a name that
+                # repeats the id is not a name, so this stays None.
+                "Tags": [{"Key": "Name", "Value": "web-asg"}],
             }
         ],
         "launch_configurations": [
@@ -388,22 +431,116 @@ def test_partition_flows_into_every_constructed_arn() -> None:
                 assert resource.resource_arn.startswith("arn:aws-us-gov:"), resource
 
 
-def test_resource_name_is_optional_and_that_is_load_bearing() -> None:
-    # Characterization: ec2 instances and every ecs record omit resource_name;
-    # consumers must keep falling back to resource_id. The typed-Resource
-    # refactor must model name as optional (or fill it in for these producers
-    # as a deliberate change).
-    ec2_records = {r["resource_type"]: r for r in flatten("ec2")}
-    assert "resource_name" not in ec2_records["ec2:instance"]
-    assert ec2_records["ec2:volume"]["resource_name"] == "vol-1"
+@pytest.mark.parametrize("service", sorted(PROCESSORS))
+def test_resource_name_key_is_always_present(service: str) -> None:
+    # Deliberate reversal of the old "resource_name is optional" pin:
+    # the key is always serialized, None (JSON null) when AWS supplies
+    # no name — so the data loads into pandas/Parquet/SQL without
+    # ragged rows and consumers never need hasattr-style checks.
+    for record in flatten(service):
+        assert "resource_name" in record, record
 
-    assert all("resource_name" not in r for r in flatten("ecs"))
-    assert all("resource_name" in r for r in flatten("efs"))
-    assert all("resource_name" in r for r in flatten("s3"))
-    assert all("resource_name" in r for r in flatten("vpc"))
-    assert all("resource_name" in r for r in flatten("elb"))
-    assert all("resource_name" in r for r in flatten("autoscaling"))
-    assert all("resource_name" in r for r in flatten("rds"))
+
+@pytest.mark.parametrize("service", sorted(PROCESSORS))
+def test_resource_name_is_real_or_null_never_invented(service: str) -> None:
+    # A name is something AWS itself supplies. It is never a copy of the
+    # id and never one of the synthesized patterns this tool used to
+    # fabricate (VPC-{cidr}, {protocol}:{port}, Rule-{priority}, ...).
+    for record in flatten(service):
+        name = record["resource_name"]
+        if name is None:
+            continue
+        assert name != record["resource_id"], record
+        for pattern in BANNED_INVENTED_NAME_PATTERNS:
+            assert not re.match(pattern, name), (pattern, record)
+
+
+def test_resource_names_are_pinned_per_producer() -> None:
+    # The full name decision table, one row per resource type: a real
+    # AWS-supplied name (Name/name attribute or Name tag) or None.
+    by_type = {
+        r["resource_type"]: r["resource_name"] for s in PROCESSORS for r in flatten(s)
+    }
+    assert by_type == {
+        # ec2: security_group and ami have genuine name attributes;
+        # instance, volume and snapshot use the Name tag (a snapshot
+        # Description is not a name), and the untagged volume stays None.
+        "ec2:instance": "web",
+        "ec2:volume": None,
+        "ec2:security-group": "default",
+        "ec2:image": "golden",
+        "ec2:snapshot": "nightly",
+        # s3: ListBuckets returns no tags and the bucket name IS the id.
+        "s3:bucket": None,
+        # vpc: no API here supplies a name attribute, so the Name tag is
+        # the only source — present on three fixtures, absent on the rest.
+        "vpc:vpc": "prod",
+        "vpc:subnet": "prod-public-a",
+        "vpc:natgateway": "egress",
+        "vpc:internet-gateway": None,
+        "vpc:route-table": None,
+        "vpc:dhcp-options": None,
+        "vpc:vpc-peering-connection": None,
+        "vpc:vpc-endpoint": None,
+        # elb: load balancers and target groups carry real AWS names;
+        # listeners and rules have none, and no elbv2 describe response
+        # returns tags.
+        "elb:loadbalancer-application": "my-alb",
+        "elb:targetgroup": "my-tg",
+        "elb:listener": None,
+        "elb:listener-rule": None,
+        # ecs: the AWS "name" IS the resource_id, so only a Name tag can
+        # add anything — read from ECS's lowercase tag shape.
+        "ecs:cluster": "Production",
+        "ecs:service": None,
+        "ecs:task-definition": None,
+        "ecs:capacity-provider": None,
+        # efs: AWS surfaces the Name tag as a Name field, but the tag
+        # itself is what we read, so the id-repeat guard applies.
+        "efs:file-system": "shared-data",
+        # rds: the identifier IS the id, so only a Name tag (RDS calls
+        # the field TagList) can add anything.
+        "rds:db": "orders primary",
+        "rds:cluster": None,
+        "rds:snapshot": None,
+        "rds:cluster-snapshot": None,
+        # autoscaling: the ASG fixture's Name tag mirrors its group name,
+        # so it stays None; launch configurations carry no tags at all;
+        # a launch template's name is genuinely distinct from its lt- id.
+        "autoscaling:autoScalingGroup": None,
+        "autoscaling:launchConfiguration": None,
+        "autoscaling:launch-template": "web-lt",
+    }
+
+
+def test_ec2_name_tag_or_null_for_instances_and_volumes() -> None:
+    # Carried from PR #51 (which fell back to the instance id) and
+    # deliberately superseded: the Name tag when AWS has one, otherwise
+    # null — the id is never duplicated into the name.
+    resources: list[Resource] = []
+    process_ec2_output(
+        {
+            "instances": [
+                {"InstanceId": "i-tagged", "Tags": [{"Key": "Name", "Value": "web"}]},
+                {"InstanceId": "i-untagged"},
+                {"InstanceId": "i-other-tags", "Tags": [{"Key": "env", "Value": "p"}]},
+            ],
+            "volumes": [
+                {"VolumeId": "vol-tagged", "Tags": [{"Key": "Name", "Value": "data"}]},
+                {"VolumeId": "vol-untagged"},
+            ],
+        },
+        REGION,
+        resources,
+        IDENTITY,
+    )
+    assert [(r.resource_id, r.resource_name) for r in resources] == [
+        ("i-tagged", "web"),
+        ("i-untagged", None),
+        ("i-other-tags", None),
+        ("vol-tagged", "data"),
+        ("vol-untagged", None),
+    ]
 
 
 def test_identity_fields_per_producer() -> None:
@@ -504,6 +641,153 @@ def test_same_resource_yields_the_same_identity_via_both_scan_paths() -> None:
         assert (resource.resource_id, resource.resource_arn) in service_side, resource
 
 
+# Every producer whose only possible name is the ``Name`` tag: the
+# per-service scan and the tag scan must agree, or the same resource is
+# named under `scan` and nameless under `scan --tag-key`. The types whose
+# name comes from a name *attribute* cannot appear here — the Tagging API
+# returns only an ARN and tags, so it never sees the attribute
+# (ADR-0005 Consequences).
+NAME_TAG = [{"Key": "Name", "Value": "shared"}]
+ECS_NAME_TAG = [{"key": "Name", "value": "shared"}]
+
+BOTH_PATH_NAME_CASES: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
+    (
+        "ec2",
+        {"instances": [{"InstanceId": "i-7", "Tags": NAME_TAG}]},
+        {
+            "ResourceARN": "arn:aws:ec2:eu-central-1:111122223333:instance/i-7",
+            "ResourceId": "i-7",
+            "ResourceType": "ec2:instance",
+            "Tags": NAME_TAG,
+        },
+    ),
+    (
+        "s3",
+        {"buckets": [{"Name": "my-bucket", "tags": NAME_TAG}]},
+        {
+            "ResourceARN": "arn:aws:s3:::my-bucket",
+            "ResourceType": "s3:bucket",
+            "Tags": NAME_TAG,
+        },
+    ),
+    (
+        "elb",
+        {
+            "listeners": [
+                {
+                    "ListenerArn": (
+                        "arn:aws:elasticloadbalancing:eu-central-1:1:"
+                        "listener/app/my-alb/abc/ghi"
+                    ),
+                    "Tags": NAME_TAG,
+                }
+            ]
+        },
+        {
+            "ResourceARN": (
+                "arn:aws:elasticloadbalancing:eu-central-1:1:"
+                "listener/app/my-alb/abc/ghi"
+            ),
+            "ResourceType": "elasticloadbalancing:listener",
+            "Tags": NAME_TAG,
+        },
+    ),
+    (
+        "elb",
+        {
+            "listener_rules": [
+                {
+                    "RuleArn": (
+                        "arn:aws:elasticloadbalancing:eu-central-1:1:"
+                        "listener-rule/app/my-alb/abc/ghi/jkl"
+                    ),
+                    "Tags": NAME_TAG,
+                }
+            ]
+        },
+        {
+            "ResourceARN": (
+                "arn:aws:elasticloadbalancing:eu-central-1:1:"
+                "listener-rule/app/my-alb/abc/ghi/jkl"
+            ),
+            "ResourceType": "elasticloadbalancing:listener-rule",
+            "Tags": NAME_TAG,
+        },
+    ),
+    (
+        "efs",
+        {
+            "file_systems": [
+                {
+                    "FileSystemId": "fs-1",
+                    "FileSystemArn": (
+                        "arn:aws:elasticfilesystem:eu-central-1:1:file-system/fs-1"
+                    ),
+                    "Name": "shared",
+                    "Tags": NAME_TAG,
+                }
+            ]
+        },
+        {
+            "ResourceARN": (
+                "arn:aws:elasticfilesystem:eu-central-1:1:file-system/fs-1"
+            ),
+            "ResourceId": "fs-1",
+            "ResourceType": "elasticfilesystem:file-system",
+            "Tags": NAME_TAG,
+        },
+    ),
+    (
+        "ecs",
+        {
+            "capacity_providers": [
+                {
+                    "name": "cp-1",
+                    "capacityProviderArn": (
+                        "arn:aws:ecs:eu-central-1:1:capacity-provider/cp-1"
+                    ),
+                    "tags": ECS_NAME_TAG,
+                }
+            ]
+        },
+        {
+            "ResourceARN": "arn:aws:ecs:eu-central-1:1:capacity-provider/cp-1",
+            "ResourceId": "cp-1",
+            "ResourceType": "ecs:capacity-provider",
+            "Tags": NAME_TAG,
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("service", "service_data", "tagging_record"),
+    BOTH_PATH_NAME_CASES,
+    ids=[case[2]["ResourceType"] for case in BOTH_PATH_NAME_CASES],
+)
+def test_the_name_tag_yields_the_same_name_via_both_scan_paths(
+    service: str,
+    service_data: dict[str, Any],
+    tagging_record: dict[str, Any],
+) -> None:
+    # Path independence for the name, the counterpart of the identity
+    # test above. The tag scan already carries every resource's tags, so
+    # it reads them with the same helper instead of dropping a name AWS
+    # supplied — otherwise one instance is "shared" under `scan` and null
+    # under `scan --tag-key`.
+    service_side: list[Resource] = []
+    PROCESSORS[service](service_data, REGION, service_side, IDENTITY)
+
+    tagging_side: list[Resource] = []
+    process_generic_service_output(
+        {"resources": [tagging_record]}, REGION, tagging_side, IDENTITY
+    )
+
+    (from_service,) = service_side
+    (from_tagging,) = tagging_side
+    assert from_service.resource_name == from_tagging.resource_name == "shared"
+
+
 def test_tagging_path_types_keep_the_aws_native_prefix() -> None:
     # Counterpart to test_resource_type_starts_with_the_cli_service_key:
     # the tagging path passes AWS's own ResourceType through untouched,
@@ -541,6 +825,7 @@ def test_generic_processor_flattens_resource_groups_records() -> None:
                 "ResourceId": "i-9",
                 "ResourceType": "ec2:instance",
                 "Region": REGION,
+                # Tags without a Name key leave resource_name None.
                 "Tags": [{"Key": "env", "Value": "prod"}],
             },
             {
@@ -561,12 +846,14 @@ def test_generic_processor_flattens_resource_groups_records() -> None:
     assert [resource.to_record() for resource in resources] == [
         {
             "region": REGION,
+            "resource_name": None,
             "resource_type": "ec2:instance",
             "resource_id": "i-9",
             "resource_arn": "arn:aws:ec2:eu-central-1:1:instance/i-9",
         },
         {
             "region": REGION,
+            "resource_name": None,
             "resource_type": "lambda:function",
             "resource_id": "fn",
             "resource_arn": "arn:aws:lambda:eu-central-1:1:function:fn",

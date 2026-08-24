@@ -184,8 +184,8 @@ reintroduce them.
   `aws_resource_inventory.lib.*` and `aws_resource_inventory.services.*`;
   never add a new top-level module.
 - Adding a service = one module + one `SERVICES` registry entry.
-- The flattened record contract (region/resource_type/resource_id/
-  resource_arn, optional resource_name) is pinned by
+- The flattened record contract (region/resource_name/resource_type/
+  resource_id/resource_arn — every key always present) is pinned by
   tests/test_resource_shape.py — changing it is a deliberate act.
 - Shipped: the shared scanning engine
   (`aws_resource_inventory/lib/engine.py`) —
@@ -221,8 +221,25 @@ reintroduce them.
   tests/test_<service>_scanner.py. The flattened-record contract for
   every producer is pinned centrally in tests/test_resource_shape.py —
   a new processor must be added there.
-- Remaining deepening work, in order: fill in missing resource names
-  (ec2 instances and ecs records show raw ids in reports today); unify
+- Resource names are **real or null**: `resource_name` is a name AWS
+  itself supplies (a Name/name attribute or the `Name` tag) or `None` —
+  never synthesized, never a copy of the id — and the serialized record
+  always carries the key (JSON `null` when absent). The `Name` tag has
+  exactly one reader, `lib/records.py` `name_from_tags`, called by every
+  producer that has tags and by the tag-scan processor, so the same
+  `Name` tag yields the same name on either scan path; it absorbs ECS's
+  lowercase `key`/`value` shape and RDS's `TagList` field, and drops a
+  tag that merely repeats the id. Every scanner must fetch the tags AWS
+  will give it — skipping a fetch is the one way that guarantee breaks.
+  A name from a name *attribute* is service-path only: the Tagging API
+  returns an ARN and tags, never the attribute (ADR-0005
+  Consequences). Pinned per type in tests/test_resource_shape.py;
+  displays fall back to the id.
+- Remaining deepening work, in order: give the tag scan the five
+  attribute-sourced names it cannot see (`ec2:security-group`,
+  `ec2:image`, `elb:loadbalancer-*`, `elb:targetgroup`,
+  `autoscaling:launch-template`) by batching one describe per type per
+  region over the ARNs the Tagging API returned; unify
   the six copies of the scan-path predicate (`all_services or tag_key
   or tag_value`) behind one helper; a progress-event seam so rich
   rendering lives only in aws_resource_inventory/cli.py (plus shrinking

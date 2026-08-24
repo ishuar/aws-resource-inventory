@@ -25,24 +25,44 @@ from aws_resource_inventory.lib.engine import (
     run_parallel,
 )
 from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import CallerIdentity, Resource
+from aws_resource_inventory.lib.records import (
+    CallerIdentity,
+    Resource,
+    name_from_tags,
+)
 
 logger = get_logger()
 
 # Per-parent listener/rule lookups fan out on threads.
 ELB_CHILD_WORKERS = 4
+# describe_tags takes up to 20 ARNs per call.
+ELB_TAG_BATCH_SIZE = 20
 
 
-def _attach_tags(elbv2_client: Any, arn_field: str, resource: dict[str, Any]) -> None:
-    arn = resource[arn_field]
-    try:
-        descriptions = elbv2_client.describe_tags(ResourceArns=[arn]).get(
-            "TagDescriptions", []
-        )
-        resource["Tags"] = descriptions[0].get("Tags", []) if descriptions else []
-    except ClientError as e:
-        logger.warning("Could not get tags for %s: %s", arn, e)
-        resource["Tags"] = []
+def _attach_tags(elbv2_client: Any, arn_field: str, resources: ResourceList) -> None:
+    """Attach every resource's ``Tags`` in place, 20 ARNs per call.
+
+    Listeners and rules have no name attribute at all, so the Name tag is
+    the only name AWS can supply for them; the tag scan reads it, and a
+    scan that skipped this would report the same listener nameless
+    (ADR-0005 §4).
+    """
+    for start in range(0, len(resources), ELB_TAG_BATCH_SIZE):
+        batch = resources[start : start + ELB_TAG_BATCH_SIZE]
+        by_arn = {resource[arn_field]: resource for resource in batch}
+        for resource in batch:
+            resource["Tags"] = []
+        try:
+            descriptions = elbv2_client.describe_tags(ResourceArns=list(by_arn)).get(
+                "TagDescriptions", []
+            )
+        except ClientError as e:
+            logger.warning("Could not get tags for %s: %s", list(by_arn), e)
+            continue
+        for description in descriptions:
+            tagged = by_arn.get(description.get("ResourceArn", ""))
+            if tagged is not None:
+                tagged["Tags"] = description.get("Tags", [])
 
 
 def _listeners_of(elbv2_client: Any, lb: dict[str, Any]) -> ResourceList:
@@ -77,16 +97,14 @@ def scan_elb(session: Any, region: str) -> ScanResult:
         load_balancers = collect_pages(
             elbv2_client, "describe_load_balancers", "LoadBalancers"
         )
-        for lb in load_balancers:
-            _attach_tags(elbv2_client, "LoadBalancerArn", lb)
+        _attach_tags(elbv2_client, "LoadBalancerArn", load_balancers)
         return load_balancers
 
     def target_groups_with_tags() -> ResourceList:
         target_groups = collect_pages(
             elbv2_client, "describe_target_groups", "TargetGroups"
         )
-        for tg in target_groups:
-            _attach_tags(elbv2_client, "TargetGroupArn", tg)
+        _attach_tags(elbv2_client, "TargetGroupArn", target_groups)
         return target_groups
 
     result = run_parallel(
@@ -107,6 +125,7 @@ def scan_elb(session: Any, region: str) -> ScanResult:
         max_workers=ELB_CHILD_WORKERS,
     )
     result["listeners"] = [listener for group in listener_groups for listener in group]
+    _attach_tags(elbv2_client, "ListenerArn", result["listeners"])
 
     rule_groups = map_parallel(
         partial(_rules_of, elbv2_client),
@@ -114,6 +133,7 @@ def scan_elb(session: Any, region: str) -> ScanResult:
         max_workers=ELB_CHILD_WORKERS,
     )
     result["listener_rules"] = [rule for group in rule_groups for rule in group]
+    _attach_tags(elbv2_client, "RuleArn", result["listener_rules"])
 
     return finish("elb", region, result)
 
@@ -150,7 +170,6 @@ def process_elb_output(
         lb_id = _extracted_id(lb_arn, "elasticloadbalancing:loadbalancer", region)
         if not lb_arn or not lb_id:
             continue
-        lb_name = lb.get("LoadBalancerName", "N/A")
         # The flavour suffix is AWS's own Type attribute ("application" |
         # "network" | "gateway") — never an enum here, so a new AWS
         # flavour flows through unchanged. elbv2 always returns Type, so
@@ -162,7 +181,7 @@ def process_elb_output(
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=lb_name,
+                resource_name=lb.get("LoadBalancerName"),
                 resource_type=(
                     f"elb:loadbalancer-{lb_type}" if lb_type else "elb:loadbalancer"
                 ),
@@ -180,13 +199,13 @@ def process_elb_output(
         )
         if not listener_arn or not listener_id:
             continue
-        protocol = listener.get("Protocol", "N/A")
-        port = listener.get("Port", "N/A")
-
         flattened_resources.append(
             Resource(
+                # AWS gives listeners no name attribute — protocol:port
+                # was our invention — so the Name tag is the only name a
+                # listener can have.
                 region=region,
-                resource_name=f"{protocol}:{port}",
+                resource_name=name_from_tags(listener.get("Tags"), listener_id),
                 resource_type="elb:listener",
                 resource_id=listener_id,
                 resource_arn=listener_arn,
@@ -200,12 +219,13 @@ def process_elb_output(
         rule_id = _extracted_id(rule_arn, "elasticloadbalancing:listener-rule", region)
         if not rule_arn or not rule_id:
             continue
-        priority = rule.get("Priority", "N/A")
-
         flattened_resources.append(
             Resource(
+                # AWS gives rules no name attribute — Rule-{priority} was
+                # our invention — so the Name tag is the only name a rule
+                # can have.
                 region=region,
-                resource_name=f"Rule-{priority}",
+                resource_name=name_from_tags(rule.get("Tags"), rule_id),
                 resource_type="elb:listener-rule",
                 resource_id=rule_id,
                 resource_arn=rule_arn,
@@ -219,12 +239,10 @@ def process_elb_output(
         tg_id = _extracted_id(tg_arn, "elasticloadbalancing:targetgroup", region)
         if not tg_arn or not tg_id:
             continue
-        tg_name = tg.get("TargetGroupName", "N/A")
-
         flattened_resources.append(
             Resource(
                 region=region,
-                resource_name=tg_name,
+                resource_name=tg.get("TargetGroupName"),
                 resource_type="elb:targetgroup",
                 resource_id=tg_id,
                 resource_arn=tg_arn,

@@ -280,7 +280,6 @@ class TestMarkdownSummary:
         flattened = [
             Resource(
                 region=REGION,
-                resource_name="bucket-a",
                 resource_type="s3:bucket",
                 resource_id="bucket-a",
                 resource_arn="arn:aws:s3:::bucket-a",

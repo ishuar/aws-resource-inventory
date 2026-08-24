@@ -33,7 +33,14 @@ that produced it, and the records inside it are unreliable as identity:
    (built by us), so consumers know which ARNs to trust byte-for-byte.
 4. `name` is the resource's real AWS name or `null` — never synthesised,
    never a copy of the id. `null` (not a missing key) keeps rows
-   rectangular for pandas/Parquet/SQL.
+   rectangular for pandas/Parquet/SQL. The `Name` tag counts as an
+   AWS-supplied name: AWS's own console shows it as the Name column and
+   the EFS API returns it as `Name`. It is read by one function
+   (`lib/records.py` `name_from_tags`) at every producer that has tags,
+   both scan paths included, so the same `Name` tag yields the same name
+   whichever path found the resource. A `Name` tag whose value repeats
+   the id is not a name and yields `null`. A name that comes from a name
+   *attribute* is service-path only — see Consequences.
 5. `type` is `<CLI service key>:<AWS type>` (e.g. `ec2:instance`,
    `vpc:vpc`, `elb:listener`) on `source: "services"`: the left half is
    a valid `--service` value, so output round-trips into the CLI. On
@@ -160,6 +167,25 @@ Field notes:
   cache.
 - Some resources now show `name: null` where a synthesised name used to
   appear; renderers must fall back to the id for display.
+- Tag-scan (`source: "tagging"`) records carry names too: the Tagging
+  API returns every resource's tags, so the same `Name` tag produces the
+  same name on both paths. Where the tag is absent, or merely repeats
+  the id, the name is `null`. Every scanner therefore fetches the tags
+  AWS will give it — S3 via `get_bucket_tagging`, ELBv2 via
+  `describe_tags` (20 ARNs per call, listeners and rules included), ECS
+  via `list_tags_for_resource` and `describe_capacity_providers`'
+  `include=["TAGS"]` — because a scanner that skips a tag fetch is the
+  one way this guarantee breaks.
+- `name` is path-dependent for the five types whose name is a name
+  *attribute*: `ec2:security-group` (`GroupName`), `ec2:image` (`Name`),
+  `elb:loadbalancer-*` (`LoadBalancerName`), `elb:targetgroup`
+  (`TargetGroupName`) and `autoscaling:launch-template`
+  (`LaunchTemplateName`). The Tagging API returns an ARN and tags and
+  nothing else, so `source: "tagging"` cannot see those attributes and
+  reports the `Name` tag or `null` instead. This mirrors AWS: its own
+  Tag Editor shows tags, not attributes. Enriching the tag path would
+  cost one batched describe call per type per region; it is queued as
+  remaining deepening work, deliberately not done here.
 - The record contract test (`tests/test_resource_shape.py`) pins the six
   keys and the type vocabulary; changing either is a deliberate act and
   a `schema_version` review.
