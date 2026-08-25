@@ -45,6 +45,7 @@ from aws_resource_inventory.lib.outputs import (
     TABLE_MINIMUM_WIDTH,
     output_results,
 )
+from aws_resource_inventory.lib.paths import default_output_dir
 
 # Import core scanning functionality
 from aws_resource_inventory.lib.resource_groups_utils import (
@@ -160,7 +161,9 @@ def scan_command(
         help=(
             "Path for the JSON results document. '-' writes it to stdout and "
             "suppresses all other output (pipes cleanly into jq). "
-            "If not provided, a dynamic name will be generated."
+            "Defaults to a generated name under "
+            "$XDG_DATA_HOME/aws-resource-inventory "
+            "(~/.local/share/aws-resource-inventory)."
         ),
     ),
     dry_run: bool = typer.Option(
@@ -569,6 +572,11 @@ def scan_command(
                 output_file, tag_key, tag_value, region_list, services
             )
         )
+        # We chose the path exactly where the user named none — the
+        # same condition _generate_output_filename branches on above.
+        # --output names a path the user owns: their permissions, not
+        # ours to tighten behind their back.
+        output_is_ours = output_file is None
 
         # Check for shutdown before processing results
         if shutdown_requested.is_set():
@@ -600,6 +608,7 @@ def scan_command(
             debug,
             identity=caller_identity,
             source=scan_source,
+            output_is_ours=output_is_ours,
             regions=region_list,
             filters=scan_filters,
             started_at=started_at,
@@ -826,7 +835,9 @@ def _handle_dry_run(
     elif output_file:
         console.print(f"  • [bold]Output file:[/bold] {output_file}")
     else:
-        console.print("  • [bold]Output file:[/bold] Auto-generated")
+        console.print(
+            f"  • [bold]Output file:[/bold] auto-generated under {default_output_dir()}"
+        )
 
     console.print(
         "\n[bold green]✅ Dry run completed. Use without --dry-run to execute the actual scan.[/bold green]"
@@ -908,7 +919,7 @@ def _generate_output_filename(
             parts.append(services[0])
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         filename = "-".join(parts) + f"-{timestamp}.json"
-        current_output_file = Path(f"/tmp/aws_resource_inventory/{filename}")
+        current_output_file = default_output_dir() / filename
     else:
         current_output_file = output_file
 

@@ -6,6 +6,7 @@ and writes the JSON envelope (to a file, or to stdout with --output -).
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -67,18 +68,43 @@ def create_aws_resources_table(
     return table
 
 
-def ensure_output_directory(output_file: Path) -> None:
-    """Ensure the output directory exists, create if it doesn't."""
+def ensure_output_directory(output_file: Path, *, ours: bool) -> None:
+    """Ensure the output directory exists, create if it doesn't.
+
+    ``ours`` states whether we chose the path — the caller always knows
+    (it applied the default). It is declared rather than recovered by
+    comparing against ``default_output_dir()``, because two spellings of
+    one directory compare unequal, and the comparison decides whether
+    the hardening runs at all.
+
+    Our own directory is made owner-only; a directory the user named
+    with ``--output`` gets the mode any other tool would give it, on
+    creation as much as after. mkdir applies its mode only when it
+    actually creates the directory, so the chmod is what holds the
+    guarantee for ours (ADR-0009).
+    """
     output_dir = output_file.parent
     if not output_dir.exists():
         try:
-            output_dir.mkdir(parents=True, exist_ok=True)
+            # 0o777 is masked by umask into the usual 0o755: their
+            # directory, their mode. Creating it does not make it ours.
+            output_dir.mkdir(parents=True, exist_ok=True, mode=0o700 if ours else 0o777)
             console.print(f"[dim]Created output directory: {output_dir}[/dim]")
         except Exception as e:
             console.print(
                 f"[red]Failed to create output directory {output_dir}: {e}[/red]"
             )
             raise
+    if ours:
+        try:
+            output_dir.chmod(0o700)
+        except OSError as e:
+            # The scan has already run and the document is written 0600
+            # regardless, so this is said out loud rather than raised —
+            # losing finished results over it would be the worse bug.
+            console.print(
+                f"[yellow]Could not restrict {output_dir} to owner-only: {e}[/yellow]"
+            )
 
 
 def process_generic_service_output(
@@ -136,6 +162,34 @@ def process_generic_service_output(
             )
 
 
+def write_document(output_file: Path, serialized: str, *, ours: bool) -> None:
+    """Write the JSON document, owner-only when we chose the path.
+
+    ``ours`` is declared by the caller for the same reason it is in
+    ``ensure_output_directory``: the directory and the document must
+    agree about who owns the path, and a path comparison can disagree
+    with itself across two spellings of one directory.
+
+    A document at our default path gets 0o600 for the same reason cache
+    entries do (ADR-0008): the parent directory is the outer guard, and
+    a file left world-readable is exposed the moment it is copied or
+    that guard is weakened. A path the user named with ``--output`` is
+    written normally — forcing a mode on a file they asked for
+    somewhere specific would be surprising, not secure.
+
+    ``os.open`` with an explicit mode rather than write-then-chmod:
+    umask can only clear permission bits, never set them, so the
+    document is never briefly world-readable.
+    """
+    if not ours:
+        output_file.write_text(serialized)
+        return
+
+    descriptor = os.open(output_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as document:
+        document.write(serialized)
+
+
 def output_results(
     results: dict[str, Any],
     output_file: Path | None,
@@ -143,6 +197,7 @@ def output_results(
     *,
     identity: CallerIdentity,
     source: Literal["services", "tagging"],
+    output_is_ours: bool,
     regions: list[str],
     filters: ScanFilters,
     started_at: str,
@@ -157,6 +212,11 @@ def output_results(
 
     ``identity`` is the scanning caller's account + partition (from STS);
     processors need it to construct the ARNs the AWS APIs do not return.
+
+    ``output_is_ours`` states whether ``output_file`` is the path we
+    generated rather than one the user named with ``--output`` — the
+    caller always knows (it applied the default). Only a path we chose
+    is hardened to owner-only.
 
     ``source`` states which scan path produced ``results`` — the caller
     always knows (it chose the path). "tagging" results are Resource
@@ -218,8 +278,8 @@ def output_results(
         table = create_aws_resources_table(flattened_resources, debug, identity)
         console.print(table)
 
-        ensure_output_directory(output_file)
-        output_file.write_text(serialized)
+        ensure_output_directory(output_file, ours=output_is_ours)
+        write_document(output_file, serialized, ours=output_is_ours)
         console.print(f"[green]Data also saved to {output_file}[/green]")
 
     return len(flattened_resources)

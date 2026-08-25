@@ -260,10 +260,15 @@ aws-inventory scan --regions us-east-1 --tag-key CostCenter --tag-value Engineer
 ### Output
 
 Every scan renders a table in the terminal and writes the JSON results
-document. `--output` controls where the document goes:
+document. With no `--output` it lands in
+`$XDG_DATA_HOME/aws-resource-inventory`, falling back to
+`~/.local/share/aws-resource-inventory` — a per-user directory, never
+shared `/tmp` (ADR-0009). The path is printed when the scan finishes.
+`--output` controls where the document goes:
 
 ```bash
-# Table in the terminal, JSON document at an auto-generated path
+# Table in the terminal, JSON document under
+# $XDG_DATA_HOME/aws-resource-inventory (default ~/.local/share/...)
 aws-inventory scan
 
 # Choose the file path

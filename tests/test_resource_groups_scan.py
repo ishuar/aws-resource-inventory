@@ -158,6 +158,7 @@ class TestTagScanFlattensEndToEnd:
             debug=False,
             identity=IDENTITY,
             source="tagging",
+            output_is_ours=False,
             regions=[REGION],
             filters=ScanFilters(
                 services=None, tag_key="env", tag_value="prod", all_services=False
