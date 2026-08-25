@@ -64,6 +64,13 @@ SERVICE_FIXTURES: dict[str, dict[str, Any]] = {
                 "Tags": [{"Key": "Name", "Value": "nightly"}],
             }
         ],
+        "addresses": [
+            {
+                "AllocationId": "eipalloc-1",
+                "PublicIp": "192.0.2.10",
+                "Tags": [{"Key": "Name", "Value": "nat-ip"}],
+            }
+        ],
     },
     "s3": {"buckets": [{"Name": "my-bucket"}]},
     "vpc": {
@@ -255,6 +262,7 @@ def test_resource_types_are_pinned_per_producer() -> None:
     by_service = {s: sorted({r["type"] for r in flatten(s)}) for s in PROCESSORS}
     assert by_service == {
         "ec2": [
+            "ec2:elastic-ip",
             "ec2:image",
             "ec2:instance",
             "ec2:security-group",
@@ -346,12 +354,13 @@ def test_arn_source_is_pinned_per_producer() -> None:
         r.resource_type: r.arn_source for s in PROCESSORS for r in flatten_resources(s)
     }
     assert by_type == {
-        # ec2: the API returns no ARNs for these five types.
+        # ec2: the API returns no ARNs for these six types.
         "ec2:instance": "constructed",
         "ec2:volume": "constructed",
         "ec2:security-group": "constructed",
         "ec2:image": "constructed",
         "ec2:snapshot": "constructed",
+        "ec2:elastic-ip": "constructed",
         # s3: ListBuckets returns no ARN; built from the documented format.
         "s3:bucket": "constructed",
         # vpc: only describe_subnets returns an ARN.
@@ -400,6 +409,7 @@ def test_constructed_arns_follow_the_documented_formats() -> None:
         "ec2:security-group": "arn:aws:ec2:eu-central-1:111122223333:security-group/sg-1",
         "ec2:image": "arn:aws:ec2:eu-central-1:111122223333:image/ami-1",
         "ec2:snapshot": "arn:aws:ec2:eu-central-1:111122223333:snapshot/snap-1",
+        "ec2:elastic-ip": "arn:aws:ec2:eu-central-1:111122223333:elastic-ip/eipalloc-1",
     }
 
     vpc = {r["type"]: r["arn"] for r in flatten("vpc")}
@@ -460,13 +470,15 @@ def test_resource_names_are_pinned_per_producer() -> None:
     by_type = {r["type"]: r["name"] for s in PROCESSORS for r in flatten(s)}
     assert by_type == {
         # ec2: security_group and ami have genuine name attributes;
-        # instance, volume and snapshot use the Name tag (a snapshot
-        # Description is not a name), and the untagged volume stays None.
+        # instance, volume, snapshot and elastic-ip use the Name tag (a
+        # snapshot Description is not a name; a PublicIp is not a name),
+        # and the untagged volume stays None.
         "ec2:instance": "web",
         "ec2:volume": None,
         "ec2:security-group": "default",
         "ec2:image": "golden",
         "ec2:snapshot": "nightly",
+        "ec2:elastic-ip": "nat-ip",
         # s3: ListBuckets returns no tags and the bucket name IS the id.
         "s3:bucket": None,
         # vpc: no API here supplies a name attribute, so the Name tag is
