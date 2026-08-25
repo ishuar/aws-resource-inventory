@@ -109,8 +109,9 @@ Field notes:
 
 - `partition` is read from the caller's own ARN, never hardcoded, so
   GovCloud and China produce correct constructed ARNs.
-- `by_region` makes a partially-failed scan visible — an errored region
-  shows a low count instead of silently vanishing.
+- `by_region` names every scanned region, reporting `0` for one that
+  returned nothing. It cannot distinguish *empty* from *errored* —
+  `scan.errors` owns failure visibility (ADR-0010).
 - `summary.by_service` is deliberately absent: derivable from `by_type`
   by splitting on `:`.
 - `started_at` and `duration_seconds` make the envelope

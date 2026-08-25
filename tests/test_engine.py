@@ -6,11 +6,11 @@ boto-error guard, and tag matching. Its invariants (tested here, stated
 in its docstrings) are what every scanner relies on:
 
 - collect_pages always paginates; items keep page order; boto errors raise.
-- run_parallel returns EXACTLY the task keys, in insertion order; a task
-  failing with ClientError/BotoCoreError degrades to [] with a warning;
-  any other exception propagates (fail fast).
-- map_parallel preserves input order despite parallel fan-out; per-item
-  boto errors and None results drop the item, nothing else.
+- run_parallel returns EXACTLY the task keys, in insertion order; every
+  exception propagates (fail fast) — the caller records it as ScanError
+  data (ADR-0010), so a denied describe never reads as "zero resources".
+- map_parallel preserves input order despite parallel fan-out; None
+  results drop the item; every exception propagates.
 - matches_tags implements the pinned tag semantics (exact pair /
   key-only / value-only / no filter).
 """
@@ -114,26 +114,26 @@ class TestRunParallel:
         assert list(result) == ["b", "a"]
         assert result == {"b": [{"n": 1}], "a": [{"n": 2}, {"n": 3}]}
 
-    def test_boto_error_degrades_that_key_to_empty(self) -> None:
+    def test_boto_error_propagates(self) -> None:
+        # No engine-level swallow (ADR-0010): a denied describe must reach
+        # scan_region and become ScanError data, never read as [].
         def boom() -> list[Any]:
             raise client_error("Throttling")
 
-        result = run_parallel(
-            {"ok": lambda: [{"n": 1}], "broken": boom},
-            service="svc",
-            region=REGION,
-            max_workers=2,
-        )
-        assert result == {"ok": [{"n": 1}], "broken": []}
+        with pytest.raises(ClientError):
+            run_parallel(
+                {"ok": lambda: [{"n": 1}], "broken": boom},
+                service="svc",
+                region=REGION,
+                max_workers=2,
+            )
 
-    def test_connection_error_also_degrades(self) -> None:
+    def test_connection_error_also_propagates(self) -> None:
         def boom() -> list[Any]:
             raise EndpointConnectionError(endpoint_url="https://example.test")
 
-        result = run_parallel(
-            {"broken": boom}, service="svc", region=REGION, max_workers=1
-        )
-        assert result == {"broken": []}
+        with pytest.raises(EndpointConnectionError):
+            run_parallel({"broken": boom}, service="svc", region=REGION, max_workers=1)
 
     def test_non_boto_exceptions_propagate(self) -> None:
         def bug() -> list[Any]:
@@ -161,13 +161,17 @@ class TestMapParallel:
         )
         assert out == [0, 2]
 
-    def test_boto_error_drops_only_that_item(self) -> None:
+    def test_boto_error_propagates(self) -> None:
+        # Same rule as run_parallel: dropping the item silently would hide
+        # a real failure — expected per-item conditions (e.g. s3's
+        # NoSuchTagSet) are the scanner's own narrow catch, not the engine's.
         def fn(n: int) -> int:
             if n == 1:
                 raise client_error("AccessDenied")
             return n
 
-        assert map_parallel(fn, [0, 1, 2], max_workers=3) == [0, 2]
+        with pytest.raises(ClientError):
+            map_parallel(fn, [0, 1, 2], max_workers=3)
 
     def test_non_boto_exceptions_propagate(self) -> None:
         def bug(n: int) -> int:

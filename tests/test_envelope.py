@@ -12,6 +12,7 @@ from typing import Any
 
 from aws_resource_inventory.lib.envelope import (
     SCHEMA_VERSION,
+    ScanError,
     ScanFilters,
     build_envelope,
     tool_version,
@@ -46,6 +47,7 @@ def build(resources: list[Resource], **overrides: Any) -> dict[str, Any]:
         "filters": NO_FILTERS,
         "started_at": "2026-08-23T09:14:22Z",
         "duration_seconds": 12.4,
+        "errors": [],
     }
     kwargs.update(overrides)
     return build_envelope(resources, **kwargs)
@@ -105,6 +107,7 @@ def test_envelope_schema_snapshot() -> None:
             },
             "started_at": "2026-08-23T09:14:22Z",
             "duration_seconds": 12.4,
+            "errors": [],
         },
         "summary": {
             "total": 3,
@@ -149,6 +152,7 @@ def test_envelope_schema_snapshot() -> None:
         "filters",
         "started_at",
         "duration_seconds",
+        "errors",
     ]
     assert list(envelope["summary"]) == ["total", "by_region", "by_type"]
     for record in envelope["resources"]:
@@ -291,3 +295,36 @@ def test_tool_version_falls_back_when_not_installed(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(importlib.metadata, "version", missing)
     assert tool_version() == "unknown"
+
+
+def test_errors_key_is_always_present_and_empty_on_a_clean_scan() -> None:
+    # Always-present-but-empty is the honesty mechanism: a consumer seeing
+    # "errors": [] knows the scan is complete; a missing key only means the
+    # document predates the field (schema_version does not bump for it).
+    envelope = build([make_resource()])
+    assert envelope["scan"]["errors"] == []
+
+
+def test_errors_record_failed_scan_units_sorted_and_service_null_for_regions() -> None:
+    # service is the failed scan unit within a region; None means the whole
+    # region failed (tagging path, timeout, crash) and serializes as null.
+    errors = [
+        ScanError(region="us-east-1", service=None, message="timed out after 300s"),
+        ScanError(region="eu-central-1", service="s3", message="AccessDenied: no"),
+        ScanError(region="eu-central-1", service="ec2", message="Throttled"),
+    ]
+    envelope = build([], regions=[REGION, "us-east-1"], errors=errors)
+    assert envelope["scan"]["errors"] == [
+        {"region": "eu-central-1", "service": "ec2", "message": "Throttled"},
+        {"region": "eu-central-1", "service": "s3", "message": "AccessDenied: no"},
+        {"region": "us-east-1", "service": None, "message": "timed out after 300s"},
+    ]
+    assert '"service": null' in json.dumps(envelope)
+
+
+def test_errors_do_not_change_by_region_counts() -> None:
+    # by_region stays plain ints: an errored region reads 0 there, and
+    # scan.errors is the single source of failure truth (ADR-0010).
+    errors = [ScanError(region="us-east-1", service=None, message="boom")]
+    envelope = build([], regions=[REGION, "us-east-1"], errors=errors)
+    assert envelope["summary"]["by_region"] == {REGION: 0, "us-east-1": 0}

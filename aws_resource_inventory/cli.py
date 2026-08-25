@@ -493,7 +493,7 @@ def scan_command(
             try:
                 if debug:
                     with logger.timer(f"Core scan execution (iteration #{scan_count})"):
-                        all_results = perform_scan(
+                        all_results, scan_errors = perform_scan(
                             session,
                             region_list,
                             services,
@@ -507,7 +507,7 @@ def scan_command(
                             shutdown_requested,
                         )
                 else:
-                    all_results = perform_scan(
+                    all_results, scan_errors = perform_scan(
                         session,
                         region_list,
                         services,
@@ -613,6 +613,7 @@ def scan_command(
             filters=scan_filters,
             started_at=started_at,
             duration_seconds=round(scan_duration, 1),
+            errors=scan_errors,
         )
 
         # Show scan completion status
@@ -620,8 +621,19 @@ def scan_command(
             refresh, scan_count, resource_count, len(region_list), scan_duration
         )
 
-        # Exit if not in refresh mode
+        # Exit if not in refresh mode. ADR-0010's exit contract: 0 =
+        # complete, 3 = partial, 1 = every region wholly failed (no
+        # usable inventory). The envelope was already written above —
+        # evidence first, verdict second. 2 stays click's (usage errors);
+        # refresh mode keeps looping regardless of per-scan failures.
         if not refresh:
+            regions_wholly_failed = {
+                error.region for error in scan_errors if error.service is None
+            }
+            if regions_wholly_failed >= set(region_list):
+                raise typer.Exit(1)
+            if scan_errors:
+                raise typer.Exit(3)
             break
 
         # Handle refresh mode continuation

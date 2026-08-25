@@ -1,20 +1,26 @@
 """
 Scan orchestration seam: aws_resource_inventory.lib.scan
 
-scan_service and scan_region are the interface the CLI drives. These tests
-exercise dispatch, caching, error swallowing, service filtering, shutdown,
-and progress reporting through that interface only — no reaching into the
-dispatch mechanism — so they must keep passing unchanged through the
-planned service-registry and spec-driven-scanner refactors.
+scan_service, scan_region and perform_scan are the interface the CLI
+drives. These tests exercise dispatch, caching, error reporting, service
+filtering, shutdown, and progress reporting through that interface only —
+no reaching into the dispatch mechanism — so they must keep passing
+unchanged through the planned service-registry and spec-driven-scanner
+refactors.
+
+Failures are data, not log lines (ADR-0010): a failed scan unit surfaces
+as a ScanError instead of silently reading as "zero resources".
 """
 
 import threading
 from typing import Any
 
+import pytest
 from botocore.exceptions import ClientError
 
 from aws_resource_inventory.lib.cache import cache_result
 from aws_resource_inventory.lib.scan import scan_region, scan_service
+from aws_resource_inventory.orchestrator import perform_scan
 
 REGION = "eu-central-1"
 
@@ -87,12 +93,16 @@ class TestScanService:
             "prod-asg"
         ]
 
-    def test_client_error_from_a_scanner_is_swallowed_to_empty(self) -> None:
+    def test_client_error_from_a_scanner_propagates(self) -> None:
+        # scan_service no longer swallows: the caller (scan_region) owns
+        # the catch and records the failure as ScanError data. Swallowing
+        # here is how AccessDenied used to read as "zero resources".
         class BrokenSession:
             def client(self, *_args: Any, **_kwargs: Any) -> Any:
                 raise client_error("AccessDenied")
 
-        assert scan_service(BrokenSession(), REGION, "s3", use_cache=False) == {}
+        with pytest.raises(ClientError):
+            scan_service(BrokenSession(), REGION, "s3", use_cache=False)
 
 
 class TestScanRegion:
@@ -109,7 +119,7 @@ class TestScanRegion:
         def on_progress(completed: int, total: int, service: str, region: str) -> None:
             progress_calls.append((completed, total, service, region))
 
-        region, results, duration = scan_region(
+        region, results, duration, errors = scan_region(
             aws_session,
             REGION,
             services=["s3"],
@@ -120,12 +130,13 @@ class TestScanRegion:
         assert region == REGION
         assert [b["Name"] for b in results["s3"]["buckets"]] == ["region-bucket"]
         assert duration >= 0
+        assert errors == []
         assert progress_calls == [(1, 1, "s3", REGION)]
 
     def test_unsupported_services_are_silently_filtered(self, aws_session: Any) -> None:
         progress_calls: list[tuple[int, int, str, str]] = []
 
-        _, results, _ = scan_region(
+        _, results, _, _ = scan_region(
             aws_session,
             REGION,
             services=["s3", "dynamodb", "bogus"],
@@ -144,7 +155,7 @@ class TestScanRegion:
         # Characterization: an empty scan result ({} or all-empty values is
         # still truthy for dicts with keys, but a falsy {} is dropped).
         # s3 with no buckets returns {"buckets": []} (truthy) and is kept.
-        _, results, _ = scan_region(
+        _, results, _, _ = scan_region(
             aws_session, REGION, services=["s3"], use_cache=False
         )
         assert results["s3"] == {"buckets": []}
@@ -155,7 +166,7 @@ class TestScanRegion:
         shutdown = threading.Event()
         shutdown.set()
 
-        _, results, _ = scan_region(
+        _, results, _, _ = scan_region(
             aws_session,
             REGION,
             services=["s3"],
@@ -164,3 +175,123 @@ class TestScanRegion:
         )
 
         assert results == {}
+
+    def test_failed_service_becomes_error_data_and_the_rest_still_scan(
+        self, aws_session: Any
+    ) -> None:
+        # One denied service must not kill the region — and must not read
+        # as "zero resources" either: it surfaces as a ScanError.
+        aws_session.client("s3", region_name=REGION).create_bucket(
+            Bucket="survivor-bucket",
+            CreateBucketConfiguration={"LocationConstraint": REGION},
+        )
+
+        broken = BrokenForOneService(aws_session, broken_service="ec2")
+        _, results, _, errors = scan_region(
+            broken, REGION, services=["s3", "ec2"], use_cache=False
+        )
+
+        assert [b["Name"] for b in results["s3"]["buckets"]] == ["survivor-bucket"]
+        assert "ec2" not in results
+        assert [(e.region, e.service) for e in errors] == [(REGION, "ec2")]
+        assert "AccessDenied" in errors[0].message
+
+
+class BrokenForOneService:
+    """A session that raises on one service's client and delegates the rest."""
+
+    def __init__(self, real_session: Any, broken_service: str) -> None:
+        self._real_session = real_session
+        self._broken_service = broken_service
+
+    def client(self, service_name: str, *args: Any, **kwargs: Any) -> Any:
+        if service_name == self._broken_service:
+            raise client_error("AccessDenied")
+        return self._real_session.client(service_name, *args, **kwargs)
+
+
+class TestPerformScan:
+    def test_returns_results_and_errors_across_regions(self, aws_session: Any) -> None:
+        aws_session.client("s3", region_name=REGION).create_bucket(
+            Bucket="fanout-bucket",
+            CreateBucketConfiguration={"LocationConstraint": REGION},
+        )
+
+        broken = BrokenForOneService(aws_session, broken_service="ec2")
+        results, errors = perform_scan(
+            broken,
+            [REGION],
+            ["s3", "ec2"],
+            tag_key=None,
+            tag_value=None,
+            max_workers=2,
+            service_workers=2,
+            use_cache=False,
+        )
+
+        assert [b["Name"] for b in results[REGION]["s3"]["buckets"]] == [
+            "fanout-bucket"
+        ]
+        assert [(e.region, e.service) for e in errors] == [(REGION, "ec2")]
+
+    def test_clean_scan_reports_no_errors(self, aws_session: Any) -> None:
+        _results, errors = perform_scan(
+            aws_session,
+            [REGION],
+            ["s3"],
+            tag_key=None,
+            tag_value=None,
+            max_workers=2,
+            service_workers=2,
+            use_cache=False,
+        )
+        assert errors == []
+
+    def test_tagging_path_region_failure_is_a_region_level_error(
+        self, aws_session: Any
+    ) -> None:
+        # The tagging path has no per-service granularity: a Resource
+        # Groups API failure fails the whole region → service is None.
+        broken = BrokenForOneService(
+            aws_session, broken_service="resourcegroupstaggingapi"
+        )
+        results, errors = perform_scan(
+            broken,
+            [REGION],
+            [],
+            tag_key="env",
+            tag_value="prod",
+            max_workers=2,
+            service_workers=2,
+            use_cache=False,
+        )
+
+        assert results == {}
+        assert [(e.region, e.service) for e in errors] == [(REGION, None)]
+        assert "AccessDenied" in errors[0].message
+
+    def test_region_crash_is_a_region_level_error(
+        self, aws_session: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The orchestrator's own safety net: anything that escapes
+        # scan_region entirely still lands in the errors list.
+        import aws_resource_inventory.orchestrator as orchestrator_module
+
+        def crash(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("thread pool exploded")
+
+        monkeypatch.setattr(orchestrator_module, "scan_region", crash)
+        results, errors = perform_scan(
+            aws_session,
+            [REGION],
+            ["s3"],
+            tag_key=None,
+            tag_value=None,
+            max_workers=2,
+            service_workers=2,
+            use_cache=False,
+        )
+
+        assert results == {}
+        assert [(e.region, e.service) for e in errors] == [(REGION, None)]
+        assert "thread pool exploded" in errors[0].message

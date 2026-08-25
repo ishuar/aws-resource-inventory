@@ -37,6 +37,20 @@ def tool_version() -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class ScanError:
+    """One failed scan unit, as recorded in the envelope (ADR-0010).
+
+    ``service`` names the scan unit that failed inside ``region``;
+    ``None`` means the whole region failed (the tagging path, a region
+    timeout, a crash) and serializes as JSON ``null``.
+    """
+
+    region: str
+    service: str | None
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class ScanFilters:
     """The filters a scan ran with, as recorded in the envelope.
 
@@ -61,6 +75,7 @@ def build_envelope(
     filters: ScanFilters,
     started_at: str,
     duration_seconds: float,
+    errors: list[ScanError],
 ) -> dict[str, Any]:
     """Shape one scan's results into the schema_version-1 document.
 
@@ -97,6 +112,13 @@ def build_envelope(
             },
             "started_at": started_at,
             "duration_seconds": duration_seconds,
+            # Always present, [] when clean: a consumer seeing an empty
+            # list knows the scan is complete; a missing key only means
+            # the document predates ADR-0010 (additive — no version bump).
+            "errors": [
+                {"region": e.region, "service": e.service, "message": e.message}
+                for e in sorted(errors, key=lambda e: (e.region, e.service or ""))
+            ],
         },
         "summary": {
             "total": len(records),

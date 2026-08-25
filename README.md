@@ -301,7 +301,8 @@ flat `resources` array, sorted by region → type → id:
       "all_services": false
     },
     "started_at": "2026-08-23T09:14:22Z",
-    "duration_seconds": 12.4
+    "duration_seconds": 12.4,
+    "errors": []
   },
   "summary": {
     "total": 1,
@@ -328,13 +329,25 @@ straight into `jq`, pandas, or SQL. `schema_version` bumps only on
 breaking changes.
 
 `summary.by_region` names every region you scanned, reporting `0` for
-one that returned nothing — so a low count is visible rather than a
-missing line you have to notice. `summary.by_type` lists only the types
-actually found: types are discovered, not requested.
+one that returned nothing. `scan.errors` states whether you can trust
+those counts: always present, `[]` when the scan completed cleanly, one
+`{region, service, message}` object per failed scan unit (`service` is
+`null` when the whole region failed). `summary.by_type` lists only the
+types actually found: types are discovered, not requested.
 
 A scan that finds nothing still writes the file. The envelope records
 which account, regions and filters were used, and that is evidence in
 its own right — "no resources found" is a result worth keeping.
+
+The exit code states how much of the scan ran, so scripts don't need to
+parse the JSON:
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Complete scan — `scan.errors` is `[]` |
+| `1` | No usable inventory — bad credentials, or every region failed (the envelope is still written) |
+| `2` | Usage error (bad flags) |
+| `3` | Partial scan — some regions or services errored; the envelope names them |
 
 ### Advanced Options
 

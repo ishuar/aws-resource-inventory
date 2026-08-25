@@ -16,7 +16,7 @@ from rich.table import Table
 from aws_resource_inventory.services.registry import SERVICES
 
 from .arn import extract_resource_id_from_arn
-from .envelope import ScanFilters, build_envelope, tool_version
+from .envelope import ScanError, ScanFilters, build_envelope, tool_version
 from .logging import get_logger
 from .records import CallerIdentity, Resource, name_from_tags
 from .resource_groups_utils import SERVICE_SHAPED_SECTIONS
@@ -202,6 +202,7 @@ def output_results(
     filters: ScanFilters,
     started_at: str,
     duration_seconds: float,
+    errors: list[ScanError],
 ) -> int:
     """Flatten results, render the table, and write the JSON envelope.
 
@@ -223,9 +224,10 @@ def output_results(
     Groups API shaped and go through the generic processor; "services"
     results route to each service's registered processor.
 
-    ``regions``, ``filters``, ``started_at`` (UTC ISO-8601 with Z) and
-    ``duration_seconds`` fill the envelope's scan block — the caller
-    owns the clock and the resolved scan parameters.
+    ``regions``, ``filters``, ``started_at`` (UTC ISO-8601 with Z),
+    ``duration_seconds`` and ``errors`` (the failed scan units,
+    ADR-0010) fill the envelope's scan block — the caller owns the
+    clock, the resolved scan parameters, and the error collection.
 
     Returns:
         int: The total number of flattened resources found.
@@ -267,6 +269,7 @@ def output_results(
         filters=filters,
         started_at=started_at,
         duration_seconds=duration_seconds,
+        errors=errors,
     )
     serialized = json.dumps(envelope, indent=2)
 
