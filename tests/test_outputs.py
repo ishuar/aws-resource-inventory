@@ -30,6 +30,7 @@ ENVELOPE_KWARGS: dict[str, Any] = {
     "filters": FILTERS,
     "started_at": "2026-08-23T09:14:22Z",
     "duration_seconds": 1.5,
+    "errors": [],
 }
 
 

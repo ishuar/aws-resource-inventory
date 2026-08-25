@@ -39,7 +39,7 @@ Two paths, chosen by your flags:
 | `aws_resource_inventory/lib/scan.py` | Fan out services per region; caching | Results cached 10 min per (region, service, tags) |
 | `aws_resource_inventory/services/registry.py` | Service name → scanner + output processor | Adding a service is one entry here |
 | `aws_resource_inventory/services/*_service.py` | One scanner per AWS service | Declarative ones are a `Describe` dict + 3-line function |
-| `aws_resource_inventory/lib/engine.py` | Pagination, parallel collection, error guard, tag matching | Result always has exactly the requested keys; AWS errors degrade a key to `[]` with a warning, other errors surface |
+| `aws_resource_inventory/lib/engine.py` | Pagination, parallel collection, tag matching | Result always has exactly the requested keys; every failure propagates so `scan_region` records it as `ScanError` data (ADR-0010) |
 | `aws_resource_inventory/lib/clients.py` | Builds every boto3 client | Connection pool 50, adaptive retries, thread-safe creation |
 | `aws_resource_inventory/lib/records.py` | `Resource` — the typed record | Malformed records fail at construction, not at report time |
 | `aws_resource_inventory/lib/arn.py` | Extracts a resource id out of an observed ARN | The one home for ARN id extraction — both scan paths share it |
@@ -73,8 +73,9 @@ and tags, never the attribute (ADR-0005 Consequences).
 Every scan writes one self-describing JSON document — the envelope
 (`schema_version` 1, ADR-0005), built by `lib/envelope.py`:
 scan metadata (tool, account, partition, regions, source, filters,
-`started_at`, `duration_seconds`), a summary (`total`, `by_region`,
-`by_type`), and `resources[]` sorted by region → type → id. Never a
+`started_at`, `duration_seconds`, `errors`), a summary (`total`,
+`by_region`, `by_type`), and `resources[]` sorted by region → type →
+id. Never a
 bare array: a file nobody can trace back to an account, a region set
 and a filter is not evidence.
 
@@ -84,8 +85,12 @@ Serialization renames the record's keys to bare ones — `region`,
 `null` when AWS supplies none.
 
 `by_region` is seeded from the scanned region list, so a region that
-returned nothing reports `0` instead of vanishing — the count is what
-makes a partially-failed scan visible. `by_type` is not seeded:
+returned nothing reports `0` instead of vanishing. Failure visibility
+belongs to `scan.errors` (ADR-0010): always present, `[]` when the scan
+is complete, one `{region, service, message}` object per failed scan
+unit (`service: null` = the whole region failed). The exit code states
+the same fact for shell consumers: `0` complete, `3` partial, `1` no
+usable inventory. `by_type` is not seeded:
 resource types are discovered, not requested, and the tag path emits
 whatever AWS returns, so there is no list to seed from.
 
@@ -106,8 +111,9 @@ through their registered processors instead of the generic one.
    can read top to bottom.
 2. One registry, one client factory, one record type, one output
    schema. Each exists exactly once; everything else uses them.
-3. AWS errors are expected and degrade gracefully (empty key plus a
-   warning). Anything else is a bug and is allowed to crash.
+3. AWS errors are expected — and recorded: a failed scan unit becomes
+   `ScanError` data in the envelope (ADR-0010), never a silent empty
+   result. Anything else is a bug and is allowed to crash.
 4. Decisions live in `docs/adr/`; product direction lives in
    `PRODUCT.md`.
 

@@ -189,10 +189,15 @@ reintroduce them.
 - Adding a service = one module + one `SERVICES` registry entry.
 - Serialized scan output is **one self-describing JSON document**
   (`schema_version: 1`, ADR-0005): a `scan` block (tool, account,
-  partition, regions, source, filters, started_at, duration_seconds),
-  a `summary` (total, by_region, by_type — no by_service, derivable),
-  and `resources[]` with bare keys
+  partition, regions, source, filters, started_at, duration_seconds,
+  errors), a `summary` (total, by_region, by_type — no by_service,
+  derivable), and `resources[]` with bare keys
   (region/type/id/name/arn/arn_source), sorted region → type → id.
+  `scan.errors` is always present — `[]` when clean, one
+  `{region, service, message}` per failed scan unit, `service: null` =
+  whole region (ADR-0010); failures are data, never just log lines —
+  no layer may swallow an exception back to empty results. Exit codes:
+  0 complete, 3 partial, 1 no usable inventory, 2 left to click.
   Built by the pure `build_envelope` in
   `aws_resource_inventory/lib/envelope.py`; the schema is pinned by
   tests/test_envelope.py and the per-record shape by
@@ -201,7 +206,7 @@ reintroduce them.
   don't bump it.
 - Shipped: the shared scanning engine
   (`aws_resource_inventory/lib/engine.py`) —
-  every scanner runs on it; pagination, guarded parallel collection,
+  every scanner runs on it; pagination, parallel collection,
   ordered fan-out, and tag matching live there and nowhere else. Fully
   declarative scanners are a `Describe` dict + a 3-line function;
   imperative ones stay plain functions calling the engine helpers.

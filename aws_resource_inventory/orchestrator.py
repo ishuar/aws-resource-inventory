@@ -27,6 +27,7 @@ from rich.progress import Progress
 from rich.table import Table
 
 # Import logging (using simplified logging)
+from aws_resource_inventory.lib.envelope import ScanError
 from aws_resource_inventory.lib.logging import get_logger
 from aws_resource_inventory.lib.outputs import TABLE_MINIMUM_WIDTH
 from aws_resource_inventory.lib.records import CallerIdentity
@@ -304,8 +305,14 @@ def perform_scan(
     progress: Progress | None = None,
     all_services: bool = False,
     shutdown_event: threading.Event | None = None,
-) -> dict[str, dict[str, Any]]:
-    """Perform the AWS scanning operation with optional progress reporting."""
+) -> tuple[dict[str, dict[str, Any]], list[ScanError]]:
+    """Perform the AWS scanning operation with optional progress reporting.
+
+    Returns the per-region results and every failed scan unit as ScanError
+    data (ADR-0010) — service-level from the per-service path, region-level
+    (``service=None``) from the tagging path and from anything that kills a
+    whole region. Failures never read as "zero resources".
+    """
     logger.debug(
         "Starting perform_scan with %d regions, %d services",
         len(region_list),
@@ -320,6 +327,7 @@ def perform_scan(
     )
 
     all_results = {}
+    scan_errors: list[ScanError] = []
     main_task = None
     region_tasks = {}
 
@@ -415,12 +423,12 @@ def perform_scan(
                 completed_futures += 1
 
                 try:
-                    region_name, region_results, scan_duration = future.result(
-                        timeout=300
-                    )
-                    total_scan_time += scan_duration
-                    if region_results:
-                        all_results[region_name] = region_results
+                    region_scan = future.result(timeout=300)
+                    region_name = region_scan.region
+                    scan_errors.extend(region_scan.errors)
+                    total_scan_time += region_scan.duration_seconds
+                    if region_scan.results:
+                        all_results[region_name] = region_scan.results
                         if progress and main_task is not None:
                             # Update the region task to show completion
                             if region_name in region_tasks:
@@ -444,8 +452,13 @@ def perform_scan(
                                     ].total,
                                 )
                             logger.info("No resources found in region %s", region_name)
-                # One region failing must not kill the other regions.
+                # One region failing must not kill the other regions —
+                # and must not vanish: it becomes ScanError data for the
+                # envelope (ADR-0010).
                 except Exception as e:  # noqa: BLE001
+                    scan_errors.append(
+                        ScanError(region=region, service=None, message=str(e))
+                    )
                     if progress and main_task is not None and region in region_tasks:
                         # Update the region task to show error
                         progress.update(
@@ -469,4 +482,4 @@ def perform_scan(
                     pending_future.cancel()
             raise
 
-    return all_results
+    return all_results, scan_errors

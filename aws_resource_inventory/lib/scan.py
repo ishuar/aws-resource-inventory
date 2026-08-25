@@ -6,6 +6,7 @@ Handles scanning operations for AWS services across regions.
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from typing import Any
 
 import boto3
@@ -13,13 +14,13 @@ from botocore.exceptions import (
     ClientError,
     ConnectTimeoutError,
     EndpointConnectionError,
-    NoCredentialsError,
 )
 
 from aws_resource_inventory.services.registry import SERVICES, SUPPORTED_SERVICES
 
 # Import cache functions
 from .cache import cache_result, get_cached_result
+from .envelope import ScanError
 
 # Import logging (using simplified logging)
 from .logging import get_logger
@@ -28,20 +29,38 @@ from .logging import get_logger
 logger = get_logger()
 
 
+@dataclass(frozen=True)
+class RegionScanResult:
+    """One region's scan outcome — both scan paths return this shape.
+
+    ``errors`` carries the region's failed scan units as ScanError data
+    (ADR-0010): one per errored service, ``service=None`` when the whole
+    region failed. Empty means the region scanned clean.
+    """
+
+    region: str
+    results: dict[str, Any]
+    duration_seconds: float
+    errors: list[ScanError] = field(default_factory=list)
+
+
 def scan_all_services_with_tags(
     session: boto3.Session,
     region: str,
     tag_key: str | None = None,
     tag_value: str | None = None,
     use_cache: bool = True,
-) -> tuple[str, dict[str, Any], float]:
+) -> RegionScanResult:
     """
     Scan ALL AWS services using Resource Groups Tagging API.
 
     This function provides service-agnostic resource discovery across ALL AWS services
     that support tagging, not just the traditional 6 services (EC2, VPC, S3, etc.).
 
-    Returns resources in the same format as scan_region for compatibility.
+    Returns the same RegionScanResult shape as scan_region. This path
+    has no per-service granularity: a Resource Groups API failure fails
+    the whole region, recorded as one ScanError with ``service=None``
+    (ADR-0010).
     """
     from .resource_groups_utils import scan_all_tagged_resources
 
@@ -72,7 +91,7 @@ def scan_all_services_with_tags(
                 ),
             )
             scan_duration = time.time() - start_time
-            return region, cached_result, scan_duration
+            return RegionScanResult(region, cached_result, scan_duration)
 
     try:
         with logger.timer(f"All-services scan in {region}"):
@@ -96,7 +115,7 @@ def scan_all_services_with_tags(
         if not results:
             logger.info("No tagged resources found in region %s", region)
 
-        return region, results, scan_duration
+        return RegionScanResult(region, results, scan_duration)
 
     except (ClientError, EndpointConnectionError, ConnectTimeoutError) as e:
         logger.error("Failed cross-service scan in region %s: %s", region, str(e))
@@ -109,7 +128,8 @@ def scan_all_services_with_tags(
                 "tag_value": tag_value,
             },
         )
-        return region, {}, time.time() - start_time
+        error = ScanError(region=region, service=None, message=str(e))
+        return RegionScanResult(region, {}, time.time() - start_time, [error])
 
 
 def scan_service(
@@ -120,7 +140,12 @@ def scan_service(
     tag_value: str | None = None,
     use_cache: bool = True,
 ) -> dict[str, Any]:
-    """Route service scan to appropriate modular scanner with improved error handling and caching."""
+    """Route service scan to the appropriate modular scanner, with caching.
+
+    Failures propagate: the caller (scan_region) owns the catch and
+    records them as ScanError data (ADR-0010) — swallowing here is how a
+    denied service used to read as "zero resources".
+    """
 
     # Check cache first
     if use_cache:
@@ -138,31 +163,15 @@ def scan_service(
             return registration.scan(session, region, tag_key, tag_value)
         return registration.scan(session, region)
 
-    try:
-        # Transient-error retries are owned by botocore's adaptive retry
-        # mode on the clients themselves (aws_scanner_lib.clients).
-        result = _do_scan()
+    # Transient-error retries are owned by botocore's adaptive retry
+    # mode on the clients themselves (aws_resource_inventory.lib.clients).
+    result = _do_scan()
 
-        # Cache the result
-        if use_cache and result:
-            cache_result(region, service, result, tag_key, tag_value)
+    # Cache the result
+    if use_cache and result:
+        cache_result(region, service, result, tag_key, tag_value)
 
-        return result
-    except ClientError as e:
-        error_code = e.response.get("Error", {}).get("Code", "Unknown")
-        logger.error(
-            "AWS API Error for %s in %s: %s - %s", service, region, error_code, str(e)
-        )
-        return {}
-    except EndpointConnectionError as e:
-        logger.error("Connection Error for %s in %s: %s", service, region, str(e))
-        return {}
-    except NoCredentialsError as e:
-        logger.error("Credentials Error for %s in %s: %s", service, region, str(e))
-        return {}
-    except (OSError, RuntimeError, ValueError) as e:
-        logger.error("Unexpected error scanning %s in %s: %s", service, region, str(e))
-        return {}
+    return result
 
 
 def scan_region(
@@ -175,10 +184,16 @@ def scan_region(
     use_cache: bool = True,
     progress_callback: Any | None = None,
     shutdown_event: Any | None = None,
-) -> tuple[str, dict[str, Any], float]:
-    """Scan all services in a single region with parallel service scanning."""
+) -> RegionScanResult:
+    """Scan all services in a single region with parallel service scanning.
+
+    The result carries the failed scan units as ScanError data
+    (ADR-0010) — one entry per service whose scan raised, so a denied
+    service never reads as "zero resources".
+    """
     start_time = time.time()
     region_results = {}
+    errors: list[ScanError] = []
 
     logger.debug("Starting region scan for %s with %d services", region, len(services))
     logger.debug(
@@ -237,17 +252,16 @@ def scan_region(
                     service_results_summary[service] = total_resources
                 else:
                     service_results_summary[service] = 0
-            except (
-                ClientError,
-                EndpointConnectionError,
-                ConnectTimeoutError,
-                NoCredentialsError,
-            ) as e:
+            # Thread-pool boundary: one service failing must not kill the
+            # region, and must not read as "zero resources" — it becomes
+            # ScanError data for the envelope (ADR-0010).
+            except Exception as e:  # noqa: BLE001
                 logger.error("Error scanning %s in %s: %s", service, region, str(e))
                 logger.log_error_context(
                     e,
                     {"service": service, "region": region, "operation": "service_scan"},
                 )
+                errors.append(ScanError(region=region, service=service, message=str(e)))
                 service_results_summary[service] = 0
 
             # Update progress if callback provided
@@ -271,4 +285,4 @@ def scan_region(
     if logger.is_debug_enabled():
         logger.debug("Region %s scan completed in %.1fs", region, scan_duration)
 
-    return region, region_results, scan_duration
+    return RegionScanResult(region, region_results, scan_duration, errors)

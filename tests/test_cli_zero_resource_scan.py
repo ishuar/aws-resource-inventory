@@ -40,7 +40,7 @@ def empty_scan(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         cli_module,
         "perform_scan",
-        lambda *args, **kwargs: {},
+        lambda *args, **kwargs: ({}, []),
     )
 
 

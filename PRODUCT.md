@@ -126,6 +126,7 @@ Cost Explorer, Cost Optimization Hub, CloudWatch metrics, CUR, EOL detection, an
 - CI mode: stable JSON schema + non-zero exit when estimated savings exceed a threshold ("waste budget").
 
 **Signal quality**
+- Partial-inventory honesty in `waste` (decision log #8, required before v1 ships): when the scan envelope's `scan.errors` is non-empty, downgrade the confidence of findings in affected regions/services or refuse to report on them — a resource in an errored region must never produce a false "unused" finding.
 - Terraform state cross-check: instead of *trusting tags*, parse tfstate the user points at — provenance from the source of truth. Strictly stronger than `--trust-tags`. Must support many small states (monorepo norm): repeatable `--tfstate` with globs and/or an S3 backend prefix; extract each resource's `arn` (fallback `id`), **union all states into one managed set**, diff = inventory ∖ union. Overlaps collapse in the union; foreign-account entries never match by ARN; warn on stale states (report per-file `serial`/last-modified). A third adapter behind the same `SignalProvider` seam.
 - More zero-cost rules: CloudWatch log groups without retention, incomplete S3 multipart uploads, buckets without lifecycle policies, unused security groups, idle VPC endpoints, unassociated route tables, default-VPC clutter.
 - Live prices via Pricing API (replace/augment the static table, per resource type as needed).
@@ -146,6 +147,7 @@ Cost Explorer, Cost Optimization Hub, CloudWatch metrics, CUR, EOL detection, an
 5. **Verb name:** `waste`.
 6. **Tag semantics:** no default managed tag; `--managed-tag` is required to enable tag-drift; `--trust-tags` upgrades drift findings and requires `--managed-tag`.
 7. **Confidence honesty (PR #22 review):** `elb-no-targets` downgraded certain → likely — zero targets is a strong signal, not proof (a freshly provisioned LB legitimately has none). `certain` is reserved for states that prove non-use, per §3's own definition.
+8. **The envelope always states its own completeness (grilling session, 2026-08-26):** partial-scan visibility is a product guarantee, not internal quality — the scan envelope is the evidence base `waste` consumes, and §2.3 is hollow if that evidence can be silently incomplete. `scan.errors` (always present, `[]` when clean) + exit codes 0/3/1; engineering decisions in ADR-0010. Consequence for `waste`: it must downgrade confidence or refuse when its input inventory is partial (see §6).
 
 ## 8. Open questions (decide during implementation)
 

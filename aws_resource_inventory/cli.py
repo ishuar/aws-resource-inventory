@@ -12,6 +12,7 @@ import signal
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -32,7 +33,7 @@ from rich.table import Table
 
 import aws_resource_inventory.lib.outputs as outputs_module
 import aws_resource_inventory.orchestrator as orchestrator_module
-from aws_resource_inventory.lib.envelope import ScanFilters
+from aws_resource_inventory.lib.envelope import ScanError, ScanFilters
 
 # Import logging configuration
 from aws_resource_inventory.lib.logging import (
@@ -491,23 +492,15 @@ def scan_command(
             logger.disable_console_output(debug_log_file)
 
             try:
-                if debug:
-                    with logger.timer(f"Core scan execution (iteration #{scan_count})"):
-                        all_results = perform_scan(
-                            session,
-                            region_list,
-                            services,
-                            tag_key,
-                            tag_value,
-                            max_workers,
-                            service_workers,
-                            use_cache,
-                            progress,
-                            all_services,
-                            shutdown_requested,
-                        )
-                else:
-                    all_results = perform_scan(
+                # The timer is debug-only decoration; the scan call is
+                # identical either way.
+                scan_timer = (
+                    logger.timer(f"Core scan execution (iteration #{scan_count})")
+                    if debug
+                    else nullcontext()
+                )
+                with scan_timer:
+                    all_results, scan_errors = perform_scan(
                         session,
                         region_list,
                         services,
@@ -613,6 +606,7 @@ def scan_command(
             filters=scan_filters,
             started_at=started_at,
             duration_seconds=round(scan_duration, 1),
+            errors=scan_errors,
         )
 
         # Show scan completion status
@@ -620,8 +614,15 @@ def scan_command(
             refresh, scan_count, resource_count, len(region_list), scan_duration
         )
 
-        # Exit if not in refresh mode
+        # Exit if not in refresh mode. ADR-0010's exit contract: 0 =
+        # complete, 3 = partial, 1 = every region wholly failed (no
+        # usable inventory). The envelope was already written above —
+        # evidence first, verdict second. 2 stays click's (usage errors);
+        # refresh mode keeps looping regardless of per-scan failures.
         if not refresh:
+            verdict = _exit_code_for(scan_errors, region_list, services)
+            if verdict:
+                raise typer.Exit(verdict)
             break
 
         # Handle refresh mode continuation
@@ -629,6 +630,29 @@ def scan_command(
             refresh, scan_count, total_scan_time, refresh_interval
         ):
             break
+
+
+def _exit_code_for(
+    scan_errors: list[ScanError], regions: list[str], services: list[str]
+) -> int:
+    """ADR-0010's verdict: 0 complete, 3 partial, 1 no usable inventory.
+
+    A region is wholly failed when it failed region-wide (``service:
+    null``) or when every service scanned in it errored — either way
+    nothing was inventoried there. Tagging-path failures are always
+    region-wide, so the per-service coverage check only ever fires on
+    the services path, where ``services`` is the scanned set.
+    """
+    if not scan_errors:
+        return 0
+
+    def wholly_failed(region: str) -> bool:
+        errored = {error.service for error in scan_errors if error.region == region}
+        return None in errored or (bool(services) and errored >= set(services))
+
+    if all(wholly_failed(region) for region in regions):
+        return 1
+    return 3
 
 
 def _silence_decorative_output() -> None:

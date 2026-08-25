@@ -2,8 +2,8 @@
 Scanning engine — the shared library every service scanner calls.
 
 One home for the mechanics all six scanners used to re-implement
-privately: pagination, parallel collection, the boto-error guard,
-per-item fan-out, tag matching, and summary logging.
+privately: pagination, parallel collection, per-item fan-out, tag
+matching, and summary logging.
 
 This is a library the services call, not a framework that calls the
 services: each service keeps its own readable ``scan_x`` function and
@@ -14,11 +14,12 @@ Invariants (relied on by tests/test_engine.py and every caller):
 - ``collect_pages`` always paginates via ``get_paginator``; items keep
   page order; boto errors raise — guarding is the caller's decision.
 - ``run_parallel`` returns EXACTLY the task keys, in insertion order,
-  every value a list — even on failure. A task raising
-  ``ClientError``/``BotoCoreError`` degrades to ``[]`` with a warning;
-  any other exception propagates (engine bugs must surface).
+  every value a list. Every exception propagates: scan_region records
+  it as ScanError data (ADR-0010), so a denied describe never reads as
+  "zero resources". Expected per-item conditions (e.g. s3's
+  NoSuchTagSet) are each scanner's own narrow catch, not the engine's.
 - ``map_parallel`` preserves input order despite parallel completion;
-  a per-item boto error or a ``None`` result drops that item only.
+  a ``None`` result drops that item; every exception propagates.
 - ``matches_tags`` implements the pinned tag semantics: key+value =
   exact pair; key-only = key exists (any value); value-only = value
   exists (any key); no filter = always True.
@@ -34,8 +35,6 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, TypeVar
 
-from botocore.exceptions import BotoCoreError, ClientError
-
 from .logging import get_logger
 
 logger = get_logger()
@@ -45,9 +44,6 @@ ScanResult = dict[str, ResourceList]
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
-
-# Sentinel distinguishing "item degraded" from a legitimate None result.
-_DROPPED = object()
 
 
 @dataclass(frozen=True)
@@ -83,7 +79,7 @@ def run_parallel(
     region: str,
     max_workers: int,
 ) -> ScanResult:
-    """Run named collection tasks concurrently under the boto-error guard."""
+    """Run named collection tasks concurrently; failures propagate."""
     result: ScanResult = {}
     if not tasks:
         return result
@@ -91,13 +87,7 @@ def run_parallel(
     with ThreadPoolExecutor(max_workers=min(len(tasks), max(1, max_workers))) as pool:
         futures = {key: pool.submit(task) for key, task in tasks.items()}
         for key, future in futures.items():
-            try:
-                result[key] = future.result()
-            except (ClientError, BotoCoreError) as e:
-                logger.warning(
-                    "Failed to scan %s %s in region %s: %s", service, key, region, e
-                )
-                result[key] = []
+            result[key] = future.result()
     return result
 
 
@@ -109,19 +99,11 @@ def map_parallel(
 ) -> list[_R]:
     """Apply fn to every item concurrently, preserving input order.
 
-    A per-item boto error or a None result drops that item only.
+    A None result drops that item only; failures propagate.
     """
-
-    def guarded(item: _T) -> Any:
-        try:
-            return fn(item)
-        except (ClientError, BotoCoreError) as e:
-            logger.warning("Skipping item after AWS error: %s", e)
-            return _DROPPED
-
     with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
-        mapped = list(pool.map(guarded, items))
-    return [r for r in mapped if r is not _DROPPED and r is not None]
+        mapped = list(pool.map(fn, items))
+    return [r for r in mapped if r is not None]
 
 
 def matches_tags(
