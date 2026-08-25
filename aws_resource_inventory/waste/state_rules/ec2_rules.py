@@ -13,38 +13,14 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from aws_resource_inventory.lib.logging import get_logger
-from aws_resource_inventory.lib.records import Resource
 from aws_resource_inventory.waste.config import WasteConfig
 from aws_resource_inventory.waste.findings import Finding
-
-logger = get_logger()
-
-Index = Mapping[tuple[str, str], Resource]
+from aws_resource_inventory.waste.state_rules.common import Index, identified, iso
 
 # The timestamp AWS embeds in StateTransitionReason, e.g.
 # "User initiated (2024-01-03 12:34:56 GMT)". Cleared by AWS on some
 # paths, so a stopped instance without it stays unclaimed.
 _STOPPED_AT = re.compile(r"\((\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) GMT\)")
-
-
-def identified(
-    index: Index, resource_type: str, resource_id: str | None
-) -> Resource | None:
-    """The indexed Resource, or None (logged) when the inventory has none."""
-    resource = index.get((resource_type, resource_id)) if resource_id else None
-    if resource is None:
-        logger.warning(
-            "No finding for %s %s: the inventory carries no identity for it",
-            resource_type,
-            resource_id,
-        )
-    return resource
-
-
-def _iso(value: Any) -> Any:
-    """Datetimes become ISO strings; everything else passes through."""
-    return value.isoformat() if isinstance(value, datetime) else value
 
 
 def ebs_unattached(
@@ -65,7 +41,7 @@ def ebs_unattached(
                 confidence="certain",
                 evidence={
                     "State": volume["State"],
-                    "CreateTime": _iso(volume.get("CreateTime")),
+                    "CreateTime": iso(volume.get("CreateTime")),
                     "Size": volume.get("Size"),
                 },
                 suggested_action="snapshot-then-delete",
@@ -172,7 +148,7 @@ def snapshot_orphaned(
                 confidence="likely",
                 evidence={
                     "VolumeId": snapshot.get("VolumeId"),
-                    "StartTime": _iso(snapshot.get("StartTime")),
+                    "StartTime": iso(snapshot.get("StartTime")),
                 },
                 suggested_action="delete",
             )

@@ -17,7 +17,13 @@ from typing import Any
 from aws_resource_inventory.lib.records import Resource
 from aws_resource_inventory.waste.config import WasteConfig
 from aws_resource_inventory.waste.findings import Finding
-from aws_resource_inventory.waste.state_rules import ec2_rules
+from aws_resource_inventory.waste.state_rules import (
+    ec2_rules,
+    ecs_rules,
+    efs_rules,
+    elb_rules,
+    rds_rules,
+)
 
 # (one region's scan data, (type, id) -> Resource index, config) -> findings
 RuleFunc = Callable[
@@ -47,4 +53,15 @@ RULES: dict[str, RuleRegistration] = {
     "ec2-long-stopped": RuleRegistration(("ec2",), ec2_rules.ec2_long_stopped),
     "snapshot-orphaned": RuleRegistration(("ec2",), ec2_rules.snapshot_orphaned),
     "ami-unused": RuleRegistration(("ec2",), ec2_rules.ami_unused),
+    "elb-no-targets": RuleRegistration(("elb",), elb_rules.elb_no_targets),
+    "rds-stopped": RuleRegistration(("rds",), rds_rules.rds_stopped),
+    "efs-empty": RuleRegistration(("efs",), efs_rules.efs_empty),
+    # The EC2-backed check cross-references capacity providers with
+    # their Auto Scaling groups, so both services must have scanned.
+    "ecs-cluster-idle": RuleRegistration(
+        ("ecs", "autoscaling"), ecs_rules.ecs_cluster_idle
+    ),
+    "ecs-service-zero-tasks": RuleRegistration(
+        ("ecs",), ecs_rules.ecs_service_zero_tasks
+    ),
 }
