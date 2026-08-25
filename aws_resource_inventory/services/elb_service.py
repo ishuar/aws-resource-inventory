@@ -65,6 +65,26 @@ def _attach_tags(elbv2_client: Any, arn_field: str, resources: ResourceList) -> 
                 tagged["Tags"] = description.get("Tags", [])
 
 
+def _attach_target_health(elbv2_client: Any, target_groups: ResourceList) -> None:
+    """Attach each group's ``TargetHealthDescriptions`` in place.
+
+    Evidence-only raw data for the waste verb's elb-no-targets rule: no
+    new resource type, nothing in the envelope. A failing lookup
+    propagates (ADR-0010) instead of leaving the group ambiguous, so on
+    a successful scan the key is always present and an empty list means
+    genuinely zero registered targets — never "health not fetched".
+    describe_target_health has no paginator; one response is complete.
+    """
+
+    def health_of(tg: dict[str, Any]) -> dict[str, Any]:
+        tg["TargetHealthDescriptions"] = elbv2_client.describe_target_health(
+            TargetGroupArn=tg["TargetGroupArn"]
+        ).get("TargetHealthDescriptions", [])
+        return tg
+
+    map_parallel(health_of, target_groups, max_workers=ELB_CHILD_WORKERS)
+
+
 def _listeners_of(elbv2_client: Any, lb: dict[str, Any]) -> ResourceList:
     listeners = collect_pages(
         elbv2_client,
@@ -105,6 +125,7 @@ def scan_elb(session: Any, region: str) -> ScanResult:
             elbv2_client, "describe_target_groups", "TargetGroups"
         )
         _attach_tags(elbv2_client, "TargetGroupArn", target_groups)
+        _attach_target_health(elbv2_client, target_groups)
         return target_groups
 
     result = run_parallel(
