@@ -49,8 +49,9 @@ costs nothing now and becomes a breaking change later.
 
 Deliberately out of scope, because they are behaviour changes rather than
 import-path changes and belong in their own PR: the on-disk cache
-directory (`/tmp/aws_scanner_cache`) and the debug log filename
-(`aws_scanner_debug_<timestamp>.log`).
+directory (`/tmp/aws_scanner_cache`, since moved by ADR-0008) and the
+debug log filename (`aws_scanner_debug_<timestamp>.log`, still
+outstanding).
 
 ## Consequences
 

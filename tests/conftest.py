@@ -34,7 +34,7 @@ def isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point the scan-result cache at a per-test directory (never /tmp)."""
     import aws_resource_inventory.lib.cache as cache_module
 
-    cache_dir = tmp_path / "aws_scanner_cache"
+    cache_dir = tmp_path / "aws-resource-inventory"
     monkeypatch.setattr(cache_module, "CACHE_DIR", cache_dir)
     return cache_dir
 
