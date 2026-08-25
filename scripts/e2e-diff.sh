@@ -105,7 +105,10 @@ git worktree add --quiet --detach "${WORKDIR}/after" "${AFTER_REF}"
 echo "    before: ${BEFORE_REF} ($(git rev-parse --short "${BEFORE_REF}"))"
 echo "    after:  ${AFTER_REF} ($(git rev-parse --short "${AFTER_REF}"))"
 
-SCAN_ARGS=(scan -r "${REGIONS}" --profile "${PROFILE}" --no-cache -f json)
+# No --format: ADR-0007 removed it, and every ref this script accepts
+# already writes the envelope to -o regardless (the pre-ADR-0007 default
+# wrote it too), so one argument list works on both sides of that change.
+SCAN_ARGS=(scan -r "${REGIONS}" --profile "${PROFILE}" --no-cache)
 if [[ -n "${TAG_KEY}" ]]; then SCAN_ARGS+=(--tag-key "${TAG_KEY}"); fi
 if [[ -n "${TAG_VALUE}" ]]; then SCAN_ARGS+=(--tag-value "${TAG_VALUE}"); fi
 
