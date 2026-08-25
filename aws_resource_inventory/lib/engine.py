@@ -48,12 +48,21 @@ _R = TypeVar("_R")
 
 @dataclass(frozen=True)
 class Describe:
-    """One paginated call filling one result key — the common case."""
+    """One paginated call filling one result key — the common case.
+
+    ``paginated=False`` is for the few operations botocore has no
+    paginator for (ec2 describe_addresses): the API returns everything
+    in one response, so the engine calls the operation directly. The
+    flag is declared on the spec — never sniffed from botocore — so a
+    botocore upgrade can't change scan behaviour (a paginator appearing
+    later is adopted by deliberately flipping the flag).
+    """
 
     op: str
     result_key: str
     kwargs: Mapping[str, Any] = field(default_factory=dict)
     flatten: Callable[[dict[str, Any]], ResourceList] | None = None
+    paginated: bool = True
 
 
 def collect_pages(
@@ -62,9 +71,17 @@ def collect_pages(
     result_key: str,
     *,
     flatten: Callable[[dict[str, Any]], ResourceList] | None = None,
+    paginated: bool = True,
     **kwargs: Any,
 ) -> ResourceList:
-    """Collect every page of a paginated operation, in page order."""
+    """Collect every page of an operation, in page order.
+
+    ``paginated=False`` treats the single response as the only page —
+    see ``Describe``.
+    """
+    if not paginated:
+        page = getattr(client, op)(**kwargs)
+        return list(flatten(page) if flatten else page[result_key])
     resources: ResourceList = []
     paginator = client.get_paginator(op)
     for page in paginator.paginate(**kwargs):
@@ -160,6 +177,7 @@ def scan_keyed(
             spec.op,
             spec.result_key,
             flatten=spec.flatten,
+            paginated=spec.paginated,
             **spec.kwargs,
         )
         for key, spec in specs.items()

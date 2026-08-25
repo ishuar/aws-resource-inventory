@@ -37,6 +37,7 @@ class TestScanEc2:
         volume_id = ec2.create_volume(AvailabilityZone=f"{REGION}a", Size=8)["VolumeId"]
         snapshot_id = ec2.create_snapshot(VolumeId=volume_id)["SnapshotId"]
         image_id = ec2.create_image(InstanceId=instance_id, Name="golden")["ImageId"]
+        allocation_id = ec2.allocate_address(Domain="vpc")["AllocationId"]
 
         result = scan_ec2(aws_session, REGION)
 
@@ -46,10 +47,12 @@ class TestScanEc2:
             "security_groups",
             "amis",
             "snapshots",
+            "addresses",
         }
         assert instance_id in [i["InstanceId"] for i in result["instances"]]
         assert volume_id in [v["VolumeId"] for v in result["volumes"]]
         assert snapshot_id in [s["SnapshotId"] for s in result["snapshots"]]
+        assert allocation_id in [a["AllocationId"] for a in result["addresses"]]
         # Owners=["self"] — only images this account created.
         assert image_id in [a["ImageId"] for a in result["amis"]]
         assert ami_id not in [a["ImageId"] for a in result["amis"]]
@@ -63,6 +66,7 @@ class TestScanEc2:
         assert result["instances"] == []
         assert result["volumes"] == []
         assert result["amis"] == []
+        assert result["addresses"] == []
         # No snapshots assertion: moto seeds public snapshots and does not
         # honour the OwnerIds=["self"] filter, so the list is never empty
         # under moto. Ownership filtering is covered by the created-resource
