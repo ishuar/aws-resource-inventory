@@ -12,13 +12,14 @@ reintroduce them.
   services (ec2, s3, ecs, efs, elb, vpc, rds, autoscaling) with tag
   filtering (Resource Groups Tagging API path). Releases are automated
   (release-please + trusted PyPI publishing gated by a manual approval).
-- Next: **`aws-inventory waste`** — find abandoned resources: cleanup
-  first, cost saving as the frequent side effect (PRODUCT.md decision
-  9; cost estimation is deferred to roadmap v4). `PRODUCT.md` is the
-  spec of record: the `Finding` type, the `SignalProvider` seam, the 10
-  v1 state rules, roadmap, and the decision log. Product guarantees
-  (non-negotiable): read-only forever, zero setup, evidence with honest
-  confidence levels.
+- Shipped: **`aws-inventory waste`** v1 — find abandoned resources:
+  cleanup first, cost saving as the frequent side effect (PRODUCT.md
+  decision 9; cost estimation is deferred to roadmap v4). Ten state
+  rules + the opt-in tag-drift provider; findings document per
+  ADR-0011. `PRODUCT.md` is the spec of record: the `Finding` type,
+  the `SignalProvider` seam, the rules, roadmap, and the decision log.
+  Product guarantees (non-negotiable): read-only forever, zero setup,
+  evidence with honest confidence levels.
 
 ## Non-negotiable engineering rules
 
@@ -273,13 +274,17 @@ reintroduce them.
 
 ## Future vision
 
-- The product turn: **`aws-inventory waste`** per `PRODUCT.md` — the
-  `Finding` type and `SignalProvider` registry (both in
-  `aws_resource_inventory/waste/`, a sibling feature package — `lib/`
-  stays feature-free) sit on top of the typed `Resource` and the
-  scanners; providers are pure and never call AWS — scanners are the
-  single fetch layer. Roadmap `PRODUCT.md` §5 (state rules + tag drift
-  → CloudWatch signals → Cost Optimization Hub → cost ranking), backlog
-  §6, decisions §7.
+- Shipped: **`aws-inventory waste`** v1 per `PRODUCT.md` — the
+  `Finding` type, `RULES`/`PROVIDERS` registries, ten state rules and
+  the tag-drift provider (all in `aws_resource_inventory/waste/`, a
+  sibling feature package — `lib/` stays feature-free); providers are
+  pure and never call AWS — scanners are the single fetch layer, and a
+  rule is skipped in a region missing a service it reads (decision 16).
+  Findings document: ADR-0011, pinned by tests/test_waste_document.py;
+  rules pinned by tests/test_waste_rules.py. Adding a rule = one
+  function in the service's `state_rules` module + one `RULES` entry.
+  Next per roadmap `PRODUCT.md` §5: the CloudWatch signal provider
+  (v2, needs its own grilling) → Cost Optimization Hub → cost ranking.
+  Backlog §6, decisions §7.
 - Optional post-roadmap chore: migrate poetry → uv (decided: not
   before; CI stays on poetry until then).

@@ -1,10 +1,10 @@
 # PRODUCT.md — `aws-inventory waste`
 
-**Status:** Spec agreed (grilling session, 2026-08-22; reshaped 2026-08-26 —
+**Status:** v1 implemented (spec 2026-08-22, reshaped 2026-08-26 —
 cleanup-first, cost estimation deferred, 10 state rules, CloudWatch provider
-pulled forward to v2). Groundwork shipped: the RDS and EFS scanners (§4), the
-typed `Resource` record, and partial-scan honesty (`scan.errors`, ADR-0010)
-are on main; the `waste` verb itself is not yet implemented.
+pulled forward to v2). The `waste` verb, both providers, the ten rules and
+the findings document (ADR-0011) are in; next is the v2 CloudWatch signal
+provider, which needs its own grilling (§5).
 **One-liner:** Find AWS resources that are abandoned — cluttering the account, often still on the bill — and report them with evidence and an honest confidence level, read-only, zero setup.
 
 ---
