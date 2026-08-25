@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from .logging import get_logger
+from .paths import user_dir
 
 
 def default_cache_dir() -> Path:
@@ -23,9 +24,7 @@ def default_cache_dir() -> Path:
     own. `XDG_CACHE_HOME` wins where it is set; `~/.cache` is the
     fallback on every platform, so there is one path to document.
     """
-    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
-    base = Path(xdg_cache_home) if xdg_cache_home else Path.home() / ".cache"
-    return base / "aws-resource-inventory"
+    return user_dir("XDG_CACHE_HOME", Path.home() / ".cache")
 
 
 # Cache configuration

@@ -45,6 +45,7 @@ from aws_resource_inventory.lib.outputs import (
     TABLE_MINIMUM_WIDTH,
     output_results,
 )
+from aws_resource_inventory.lib.paths import default_output_dir
 
 # Import core scanning functionality
 from aws_resource_inventory.lib.resource_groups_utils import (
@@ -160,7 +161,9 @@ def scan_command(
         help=(
             "Path for the JSON results document. '-' writes it to stdout and "
             "suppresses all other output (pipes cleanly into jq). "
-            "If not provided, a dynamic name will be generated."
+            "Defaults to a generated name under "
+            "$XDG_DATA_HOME/aws-resource-inventory "
+            "(~/.local/share/aws-resource-inventory)."
         ),
     ),
     dry_run: bool = typer.Option(
@@ -908,7 +911,7 @@ def _generate_output_filename(
             parts.append(services[0])
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         filename = "-".join(parts) + f"-{timestamp}.json"
-        current_output_file = Path(f"/tmp/aws_resource_inventory/{filename}")
+        current_output_file = default_output_dir() / filename
     else:
         current_output_file = output_file
 

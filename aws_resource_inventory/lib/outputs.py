@@ -6,6 +6,7 @@ and writes the JSON envelope (to a file, or to stdout with --output -).
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,6 +18,7 @@ from aws_resource_inventory.services.registry import SERVICES
 from .arn import extract_resource_id_from_arn
 from .envelope import ScanFilters, build_envelope, tool_version
 from .logging import get_logger
+from .paths import default_output_dir
 from .records import CallerIdentity, Resource, name_from_tags
 from .resource_groups_utils import SERVICE_SHAPED_SECTIONS
 
@@ -68,17 +70,26 @@ def create_aws_resources_table(
 
 
 def ensure_output_directory(output_file: Path) -> None:
-    """Ensure the output directory exists, create if it doesn't."""
+    """Ensure the output directory exists, create if it doesn't.
+
+    Our own default directory is made owner-only; a directory the user
+    named with ``--output`` is left exactly as they have it. mkdir
+    applies its mode only when it creates the directory, so the chmod is
+    what actually holds the guarantee (ADR-0009).
+    """
     output_dir = output_file.parent
+    ours = output_dir == default_output_dir()
     if not output_dir.exists():
         try:
-            output_dir.mkdir(parents=True, exist_ok=True)
+            output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             console.print(f"[dim]Created output directory: {output_dir}[/dim]")
         except Exception as e:
             console.print(
                 f"[red]Failed to create output directory {output_dir}: {e}[/red]"
             )
             raise
+    if ours:
+        output_dir.chmod(0o700)
 
 
 def process_generic_service_output(
@@ -134,6 +145,29 @@ def process_generic_service_output(
                     arn_source="observed",
                 )
             )
+
+
+def write_document(output_file: Path, serialized: str) -> None:
+    """Write the JSON document, owner-only when we chose the path.
+
+    A document at our default path gets 0o600 for the same reason cache
+    entries do (ADR-0008): the parent directory is the outer guard, and
+    a file left world-readable is exposed the moment it is copied or
+    that guard is weakened. A path the user named with ``--output`` is
+    written normally — forcing a mode on a file they asked for
+    somewhere specific would be surprising, not secure.
+
+    ``os.open`` with an explicit mode rather than write-then-chmod:
+    umask can only clear permission bits, never set them, so the
+    document is never briefly world-readable.
+    """
+    if output_file.parent != default_output_dir():
+        output_file.write_text(serialized)
+        return
+
+    descriptor = os.open(output_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as document:
+        document.write(serialized)
 
 
 def output_results(
@@ -219,7 +253,7 @@ def output_results(
         console.print(table)
 
         ensure_output_directory(output_file)
-        output_file.write_text(serialized)
+        write_document(output_file, serialized)
         console.print(f"[green]Data also saved to {output_file}[/green]")
 
     return len(flattened_resources)

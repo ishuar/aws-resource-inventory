@@ -45,6 +45,7 @@ Two paths, chosen by your flags:
 | `aws_resource_inventory/lib/arn.py` | Extracts a resource id out of an observed ARN | The one home for ARN id extraction — both scan paths share it |
 | `aws_resource_inventory/lib/envelope.py` | `build_envelope` — Resource records → the serialized JSON document | Pure: fixtures in, dict out. The caller owns the clock and the scan parameters |
 | `aws_resource_inventory/lib/outputs.py` | Records → the JSON envelope + the terminal table | Caller states the scan path via `source=` — never guessed |
+| `aws_resource_inventory/lib/paths.py` | Where the tool puts files on disk | One resolver: XDG variable first, one documented fallback per platform (ADR-0009) |
 | `aws_resource_inventory/lib/cache.py` | Pickle cache with 10-min TTL in `~/.cache/aws-resource-inventory` (ADR-0008) | Best-effort: any cache failure is just a miss |
 
 ## The data shape
