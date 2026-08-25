@@ -18,3 +18,10 @@ class WasteConfig:
     stopped_days: int = 90
     # Minimum image age in days before ami-unused fires.
     unused_image_days: int = 90
+    # Tag-drift inputs. The tag is the user's own convention (--managed-tag,
+    # never a default); the tagged set is fetched by the orchestration via
+    # the existing Tagging API path — providers make no AWS calls.
+    managed_tag_key: str | None = None
+    managed_tag_value: str | None = None
+    trust_tags: bool = False
+    tagged_arns: frozenset[str] = frozenset()

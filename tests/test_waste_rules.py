@@ -13,10 +13,16 @@ unidentifiable yields no finding.
 from datetime import datetime, timezone
 from typing import Any
 
+import pytest
+
 from aws_resource_inventory.lib.records import Resource
 from aws_resource_inventory.waste.config import WasteConfig
 from aws_resource_inventory.waste.findings import Finding
-from aws_resource_inventory.waste.providers import evaluate_state_rules
+from aws_resource_inventory.waste.providers import (
+    PROVIDERS,
+    evaluate_state_rules,
+    evaluate_tag_drift,
+)
 from aws_resource_inventory.waste.registry import RULES
 
 REGION = "eu-central-1"
@@ -615,3 +621,69 @@ class TestEcsServiceZeroTasks:
             ecs_data(services=[self.service(2)]), [self.service_resource()]
         )
         assert findings == []
+
+
+class TestTagDrift:
+    def drift_config(self, **overrides: Any) -> WasteConfig:
+        values: dict[str, Any] = {
+            "now": NOW,
+            "managed_tag_key": "managed_by",
+            "managed_tag_value": "terraform",
+            "tagged_arns": frozenset(),
+        }
+        values.update(overrides)
+        return WasteConfig(**values)
+
+    def test_untagged_resource_is_review_grade_drift(self) -> None:
+        untagged = resource("ec2:volume", "vol-1")
+        findings = evaluate_tag_drift({}, [untagged], REGION, self.drift_config())
+        assert [f.rule for f in findings] == ["tag-drift"]
+        finding = findings[0]
+        assert finding.confidence == "review"
+        assert finding.suggested_action == "review"
+        assert finding.evidence == {"managed_tag": "managed_by=terraform"}
+        assert finding.resource is untagged
+
+    def test_tagged_resource_is_not_drift(self) -> None:
+        tagged = resource("ec2:volume", "vol-1")
+        config = self.drift_config(tagged_arns=frozenset({tagged.resource_arn}))
+        assert evaluate_tag_drift({}, [tagged], REGION, config) == []
+
+    def test_trust_tags_upgrades_drift_to_likely(self) -> None:
+        # The user declaring "untagged means abandoned" is a runtime
+        # input (--trust-tags), never a baked-in assumption.
+        findings = evaluate_tag_drift(
+            {},
+            [resource("ec2:volume", "vol-1")],
+            REGION,
+            self.drift_config(trust_tags=True),
+        )
+        assert findings[0].confidence == "likely"
+
+    def test_key_only_tag_reads_as_the_bare_key(self) -> None:
+        findings = evaluate_tag_drift(
+            {},
+            [resource("ec2:volume", "vol-1")],
+            REGION,
+            self.drift_config(managed_tag_value=None),
+        )
+        assert findings[0].evidence == {"managed_tag": "managed_by"}
+
+    def test_types_the_tagging_api_cannot_see_are_never_drift(self) -> None:
+        # The Tagging API does not cover Auto Scaling groups, and launch
+        # configurations cannot be tagged at all — absence from the
+        # tagged set proves nothing for them (evidence, not vibes).
+        blind = [
+            resource("autoscaling:autoScalingGroup", "web-asg"),
+            resource("autoscaling:launchConfiguration", "web-lc"),
+        ]
+        assert evaluate_tag_drift({}, blind, REGION, self.drift_config()) == []
+
+    def test_running_without_a_managed_tag_is_a_contract_violation(self) -> None:
+        with pytest.raises(ValueError, match="managed_tag_key"):
+            evaluate_tag_drift({}, [], REGION, WasteConfig(now=NOW))
+
+
+class TestProviderRegistry:
+    def test_both_v1_providers_are_registered(self) -> None:
+        assert set(PROVIDERS) == {"state-rules", "tag-drift"}
