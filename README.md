@@ -22,7 +22,7 @@ A comprehensive AWS multi-service scanner with tag-based filtering, parallel pro
 | Service          | Description                                                                                                             | Resources Scanned                                                 |
 |------------------|-------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|
 | **All Services** | With [Resource Groups Tagging API](https://docs.aws.amazon.com/resourcegroupstagging/latest/APIReference/overview.html) | 100+ AWS services when using tags                                 |
-| **EC2**          | Elastic Compute Cloud                                                                                                   | Instances, Volumes, Security Groups, AMIs, Snapshots              |
+| **EC2**          | Elastic Compute Cloud                                                                                                   | Instances, Volumes, Security Groups, AMIs, Snapshots, Elastic IPs |
 | **S3**           | Simple Storage Service                                                                                                  | Buckets and their configurations                                  |
 | **ECS**          | Elastic Container Service                                                                                               | Clusters, Services, Task Definitions, Capacity Providers          |
 | **VPC**          | Virtual Private Cloud                                                                                                   | VPCs, Subnets, Route Tables, IGWs, NAT Gateways, DHCP Options, Peering Connections, Endpoints |
@@ -466,7 +466,7 @@ aws-resource-inventory/
 │   │
 │   └── services/                    # One scanner module per AWS service
 │       ├── registry.py              # Single source of truth: service → scanner + output processor
-│       ├── ec2_service.py           # Instances, volumes, security groups, AMIs, snapshots
+│       ├── ec2_service.py           # Instances, volumes, security groups, AMIs, snapshots, Elastic IPs
 │       ├── s3_service.py            # Buckets (region-filtered, tag-enriched)
 │       ├── ecs_service.py           # Clusters, services, task definitions, capacity providers
 │       ├── efs_service.py           # File systems

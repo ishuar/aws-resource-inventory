@@ -2,9 +2,9 @@
 EC2 Service Scanner
 ------------------
 
-Scans EC2 resources: instances, volumes, security groups, AMIs, and
-snapshots. Tag-based filtering is handled by the Resource Groups API at
-the main scanner level.
+Scans EC2 resources: instances, volumes, security groups, AMIs,
+snapshots, and Elastic IPs. Tag-based filtering is handled by the
+Resource Groups API at the main scanner level.
 
 Fully declarative: every resource type is one paginated describe call,
 so the whole scan is a Describe spec executed by the shared engine.
@@ -43,6 +43,9 @@ EC2_SPECS: dict[str, Describe] = {
     "snapshots": Describe(
         "describe_snapshots", "Snapshots", kwargs={"OwnerIds": ["self"]}
     ),
+    # describe_addresses has no paginator: the API returns every address
+    # in one response (there is no NextToken to follow).
+    "addresses": Describe("describe_addresses", "Addresses", paginated=False),
 }
 
 
@@ -141,6 +144,25 @@ def process_ec2_output(
                 # form in the IAM reference covers images shared from
                 # another account, which this scanner never returns.
                 resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:image/{ami_id}",
+                arn_source="constructed",
+            )
+        )
+
+    # Elastic IPs. The id is the AllocationId; addresses without one
+    # (EC2-Classic, retired 2023) are skipped rather than half-identified.
+    for address in service_data.get("addresses", []):
+        allocation_id = address.get("AllocationId")
+        if not allocation_id:
+            _skip_missing_id("ec2:elastic-ip", region)
+            continue
+        flattened_resources.append(
+            Resource(
+                region=region,
+                # A PublicIp is not a name, so the Name tag is the only source.
+                resource_name=name_from_tags(address.get("Tags"), allocation_id),
+                resource_type="ec2:elastic-ip",
+                resource_id=allocation_id,
+                resource_arn=f"arn:{identity.partition}:ec2:{region}:{identity.account}:elastic-ip/{allocation_id}",
                 arn_source="constructed",
             )
         )

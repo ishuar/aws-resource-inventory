@@ -205,6 +205,49 @@ class TestMatchesTags:
         assert matches_tags([], None, None) is True
 
 
+class FakeUnpaginatedClient:
+    """Direct-call fake: get_paginator raising proves the engine never asks."""
+
+    def __init__(self, op: str, response: dict[str, Any]) -> None:
+        self._response = response
+        self.call_kwargs: dict[str, Any] | None = None
+        setattr(self, op, self._call)
+
+    def _call(self, **kwargs: Any) -> dict[str, Any]:
+        self.call_kwargs = kwargs
+        return self._response
+
+    def get_paginator(self, op: str) -> Any:
+        raise AssertionError("paginated=False must never build a paginator")
+
+
+class TestUnpaginatedDescribe:
+    # Some operations (ec2 describe_addresses) have no paginator: the API
+    # returns everything in one response and botocore's get_paginator
+    # raises. The flag is explicit on the spec — never sniffed from
+    # botocore, so a botocore upgrade can't change scan behaviour.
+
+    def test_collect_pages_calls_the_operation_directly(self) -> None:
+        client = FakeUnpaginatedClient(
+            "describe_addresses", {"Addresses": [{"AllocationId": "eipalloc-1"}]}
+        )
+        result = collect_pages(
+            client, "describe_addresses", "Addresses", paginated=False, Filters=[]
+        )
+        assert result == [{"AllocationId": "eipalloc-1"}]
+        assert client.call_kwargs == {"Filters": []}
+
+    def test_scan_keyed_honours_the_flag(self) -> None:
+        client = FakeUnpaginatedClient(
+            "describe_addresses", {"Addresses": [{"AllocationId": "eipalloc-1"}]}
+        )
+        specs = {
+            "addresses": Describe("describe_addresses", "Addresses", paginated=False)
+        }
+        result = scan_keyed(client, specs, service="ec2", region=REGION, max_workers=1)
+        assert result == {"addresses": [{"AllocationId": "eipalloc-1"}]}
+
+
 class TestScanKeyed:
     def test_whole_scan_from_describe_specs(self) -> None:
         client = FakeClient(
