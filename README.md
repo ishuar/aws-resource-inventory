@@ -11,6 +11,7 @@ A comprehensive AWS multi-service scanner with tag-based filtering, parallel pro
 ## Features
 
 - Scans eight AWS services — EC2, S3, ECS, EFS, VPC, RDS, ELB, and Auto Scaling — across multiple regions concurrently, with or without tag filters.
+- Finds abandoned resources with `aws-inventory waste`: ten state rules plus an opt-in tag-drift check, every finding carrying evidence and an honest confidence level. Read-only, zero setup.
 - Discovers resources from 100+ AWS services via the Resource Groups Tagging API (`--all-services`, requires a tag filter).
 - Results render as a terminal table and are always written as one self-describing JSON document — to a file, or to stdout with `--output -` for piping straight into `jq`.
 - Result caching with a 10-minute TTL (`--cache` / `--no-cache`).
@@ -256,6 +257,39 @@ aws-inventory scan --tag-key app --tag-value web-server
 # Filter by cost center in specific regions
 aws-inventory scan --regions us-east-1 --tag-key CostCenter --tag-value Engineering
 ```
+
+### Finding waste
+
+`aws-inventory waste` scans the services its rules read and reports
+resources that look abandoned — cleanup first, cost saving as the
+frequent side effect. Every finding carries the raw AWS facts that
+triggered it (`evidence`), an honest confidence level (`certain` /
+`likely` / `review`), and a suggested action. The tool never mutates
+anything (see [PRODUCT.md](PRODUCT.md) for the rules and guarantees).
+
+```bash
+# State rules only (ten rules: unattached volumes, unassociated
+# Elastic IPs, long-stopped instances, orphaned snapshots, unused AMIs,
+# empty target groups, stopped databases, empty file systems, idle ECS
+# clusters, scaled-to-zero services)
+aws-inventory waste --regions eu-central-1
+
+# + tag-drift: resources missing your managed tag become findings
+aws-inventory waste --managed-tag managed_by=terraform
+
+# Your org guarantees "tagged = maintained": drift upgrades to likely
+aws-inventory waste --managed-tag managed_by=terraform --trust-tags
+
+# Findings as JSON for downstream systems (ADR-0011)
+aws-inventory waste --regions eu-central-1 --output findings.json
+aws-inventory waste --regions eu-central-1 --output - | jq '.summary'
+
+# Thresholds
+aws-inventory waste --stopped-days 30 --unused-image-days 180
+```
+
+Exit codes match `scan`: `0` complete, `3` partial (the document's
+`scan.errors` names what failed), `1` no usable inventory.
 
 ### Output
 

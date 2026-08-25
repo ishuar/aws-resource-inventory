@@ -7,11 +7,14 @@ Command-line interface for scanning AWS resources across multiple services and r
 This module contains all CLI logic separated from core business functionality.
 """
 
+import dataclasses
+import json
 import os
 import signal
 import sys
 import threading
 import time
+from collections import Counter
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +36,7 @@ from rich.table import Table
 
 import aws_resource_inventory.lib.outputs as outputs_module
 import aws_resource_inventory.orchestrator as orchestrator_module
-from aws_resource_inventory.lib.envelope import ScanError, ScanFilters
+from aws_resource_inventory.lib.envelope import ScanError, ScanFilters, tool_version
 
 # Import logging configuration
 from aws_resource_inventory.lib.logging import (
@@ -44,12 +47,16 @@ from aws_resource_inventory.lib.logging import (
 )
 from aws_resource_inventory.lib.outputs import (
     TABLE_MINIMUM_WIDTH,
+    ensure_output_directory,
+    flatten_results,
     output_results,
+    write_document,
 )
 from aws_resource_inventory.lib.paths import default_output_dir
 
 # Import core scanning functionality
 from aws_resource_inventory.lib.resource_groups_utils import (
+    get_all_tagged_resources_across_services,
     should_use_resource_groups_api,
 )
 
@@ -65,6 +72,14 @@ from aws_resource_inventory.orchestrator import (
 
 # Single source of truth for scannable services
 from aws_resource_inventory.services.registry import SUPPORTED_SERVICES
+from aws_resource_inventory.waste.config import WasteConfig
+from aws_resource_inventory.waste.document import build_findings_document
+from aws_resource_inventory.waste.findings import Finding
+from aws_resource_inventory.waste.providers import (
+    evaluate_state_rules,
+    evaluate_tag_drift,
+)
+from aws_resource_inventory.waste.registry import RULES
 
 # Global AWS profile (module-level constant)
 aws_profile = os.environ.get("AWS_PROFILE", "default")
@@ -1006,6 +1021,343 @@ def _handle_refresh_continuation(
         return False
 
     return True
+
+
+@app.command(name="waste")
+def waste_command(
+    regions: str | None = typer.Option(
+        None, "--regions", "-r", help="Comma-separated AWS regions to scan"
+    ),
+    profile: str | None = typer.Option(
+        aws_profile, "--profile", "-p", help="AWS profile to use"
+    ),
+    managed_tag: str | None = typer.Option(
+        None,
+        "--managed-tag",
+        help=(
+            "Tag marking managed resources, KEY or KEY=VALUE. Enables the "
+            "tag-drift provider: inventoried resources without the tag "
+            "become review-grade findings. No default — the tag is your "
+            "org's own convention."
+        ),
+    ),
+    trust_tags: bool = typer.Option(
+        False,
+        "--trust-tags",
+        help=(
+            'Your org guarantees "tagged = maintained": drift findings '
+            "upgrade review -> likely. Requires --managed-tag."
+        ),
+    ),
+    stopped_days: int = typer.Option(
+        90,
+        "--stopped-days",
+        help="Days an instance must have been stopped before ec2-long-stopped fires",
+    ),
+    unused_image_days: int = typer.Option(
+        90,
+        "--unused-image-days",
+        help="Minimum AMI age in days before ami-unused fires",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help=(
+            "Path for the JSON findings document. '-' writes it to stdout "
+            "and suppresses all other output (pipes cleanly into jq). "
+            "Defaults to a generated name under "
+            "$XDG_DATA_HOME/aws-resource-inventory."
+        ),
+    ),
+    max_workers: int = typer.Option(
+        8,
+        "--max-workers",
+        "-w",
+        help="Maximum number of parallel workers for region scanning (1-20)",
+    ),
+    service_workers: int = typer.Option(
+        4,
+        "--service-workers",
+        help="Maximum number of parallel workers for service scanning within each region (1-10)",
+    ),
+    use_cache: bool = typer.Option(
+        True,
+        "--cache/--no-cache",
+        help="Enable/disable caching of scan results (TTL: 10 minutes)",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        "-d",
+        help="Enable debug mode with verbose logging and detailed execution traces",
+    ),
+) -> None:
+    """
+    Find abandoned AWS resources — with evidence and honest confidence.
+
+    Scans the services the waste rules read, evaluates every registered
+    rule, and reports findings as a table plus a JSON findings document.
+    Read-only, zero setup. Exit codes match scan: 0 complete, 3 partial,
+    1 no usable inventory.
+    """
+    # Same stdout contract as scan --output -: the document owns the
+    # stream, decided before logging configures its console.
+    to_stdout = output_file is not None and str(output_file) == "-"
+    debug_log_file = create_debug_log_file(app_log_file) if debug else None
+    logger = configure_logging(
+        debug=debug,
+        log_file=debug_log_file,
+        verbose=app_verbose,
+        log_to_stderr=to_stdout,
+    )
+    if to_stdout:
+        _silence_decorative_output()
+
+    if trust_tags and not managed_tag:
+        console.print("[red]❌ Error: --trust-tags requires --managed-tag[/red]")
+        raise typer.Exit(1)
+    managed_tag_key, managed_tag_value = _parse_managed_tag(managed_tag)
+
+    max_workers = max(1, min(max_workers, 20))
+    service_workers = max(1, min(service_workers, 10))
+
+    display_banner(debug)
+    region_list = _handle_regions(regions)
+
+    # Exactly the services the registered rules read — derived from the
+    # registry, so a new rule's service is scanned automatically.
+    services = sorted(
+        {
+            service
+            for registration in RULES.values()
+            for service in registration.services
+        }
+    )
+
+    try:
+        session = get_session(profile)
+    except RuntimeError as e:
+        logger.log_error_context(
+            e, {"profile": profile, "operation": "AWS session creation"}
+        )
+        console.print(f"\n[red]AWS Session Error: {e}[/red]")
+        console.print(
+            "\n[yellow]💡 Please check your AWS configuration and try again.[/yellow]"
+        )
+        raise typer.Exit(1) from None
+
+    credentials_valid, credential_message, caller_identity = validate_aws_credentials(
+        session, profile
+    )
+    if not credentials_valid or caller_identity is None:
+        logger.error("AWS credential validation failed: %s", credential_message)
+        console.print(f"\n[red]{credential_message}[/red]")
+        raise typer.Exit(1)
+    console.print(f"\n[green]{credential_message}[/green]")
+
+    _setup_signal_handlers()
+    start_time = time.time()
+    started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    console.print(
+        f"\n[bold]🔎 Scanning {len(services)} services across "
+        f"{len(region_list)} regions for waste evidence...[/bold]"
+    )
+
+    progress_console = get_output_console()
+    progress_display = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=progress_console,
+        refresh_per_second=10,
+    )
+    with Live(
+        Panel(
+            progress_display,
+            title="[bold white]Scanning Progress (waste)[/bold white]",
+            border_style="bright_blue" if not debug else "green",
+            padding=(0, 1),
+        ),
+        console=progress_console,
+        refresh_per_second=10,
+    ):
+        logger.disable_console_output(debug_log_file)
+        try:
+            all_results, scan_errors = perform_scan(
+                session,
+                region_list,
+                services,
+                None,
+                None,
+                max_workers,
+                service_workers,
+                use_cache,
+                progress_display,
+                False,
+                shutdown_requested,
+            )
+        finally:
+            logger.enable_console_output(debug_log_file)
+
+    if shutdown_requested.is_set():
+        console.print("[yellow]Waste scan cancelled[/yellow]")
+        raise typer.Exit(1)
+
+    # The tagged set per region, for the drift diff. A failed fetch is
+    # recorded and that region's drift is skipped — missing data must
+    # never read as "everything drifted" (PRODUCT.md decision 16).
+    tagged_by_region: dict[str, frozenset[str]] = {}
+    if managed_tag_key:
+        for region in region_list:
+            try:
+                by_service = get_all_tagged_resources_across_services(
+                    session, region, managed_tag_key, managed_tag_value
+                )
+                tagged_by_region[region] = frozenset(
+                    entry["ResourceARN"]
+                    for sections in by_service.values()
+                    for entries in sections.values()
+                    for entry in entries
+                )
+            # Same boundary as scan_region's per-service catch: one failed
+            # fetch must not kill the run, and it becomes ScanError data,
+            # never just a log line (ADR-0010).
+            except Exception as e:  # noqa: BLE001
+                logger.error("Failed to fetch the tagged set in %s: %s", region, str(e))
+                scan_errors.append(
+                    ScanError(region=region, service="tagging", message=str(e))
+                )
+
+    resources = flatten_results(all_results, caller_identity, "services")
+    config = WasteConfig(
+        now=datetime.now(timezone.utc),
+        stopped_days=stopped_days,
+        unused_image_days=unused_image_days,
+        managed_tag_key=managed_tag_key,
+        managed_tag_value=managed_tag_value,
+        trust_tags=trust_tags,
+    )
+
+    findings: list[Finding] = []
+    for region in region_list:
+        region_data = all_results.get(region, {})
+        region_resources = [r for r in resources if r.region == region]
+        findings.extend(
+            evaluate_state_rules(region_data, region_resources, region, config)
+        )
+        if managed_tag_key and region in tagged_by_region:
+            findings.extend(
+                evaluate_tag_drift(
+                    region_data,
+                    region_resources,
+                    region,
+                    dataclasses.replace(config, tagged_arns=tagged_by_region[region]),
+                )
+            )
+
+    document = build_findings_document(
+        findings,
+        version=tool_version(),
+        identity=caller_identity,
+        regions=region_list,
+        services=services,
+        managed_tag=managed_tag,
+        trust_tags=trust_tags,
+        stopped_days=stopped_days,
+        unused_image_days=unused_image_days,
+        started_at=started_at,
+        duration_seconds=round(time.time() - start_time, 1),
+        errors=scan_errors,
+    )
+    serialized = json.dumps(document, indent=2)
+
+    if to_stdout:
+        # The document owns stdout — plain print, same as scan.
+        print(serialized)
+    else:
+        _display_findings(findings, scan_errors)
+        current_output_file = (
+            output_file
+            if output_file is not None
+            else default_output_dir()
+            / f"waste-findings-{time.strftime('%Y%m%d-%H%M%S')}.json"
+        )
+        output_is_ours = output_file is None
+        ensure_output_directory(current_output_file, ours=output_is_ours)
+        write_document(current_output_file, serialized, ours=output_is_ours)
+        console.print(f"[green]Findings saved to {current_output_file}[/green]")
+
+    verdict = _exit_code_for(scan_errors, region_list, services)
+    if verdict:
+        raise typer.Exit(verdict)
+
+
+def _parse_managed_tag(managed_tag: str | None) -> tuple[str | None, str | None]:
+    """--managed-tag KEY or KEY=VALUE, split once; refuse an empty key."""
+    if managed_tag is None:
+        return None, None
+    key, separator, value = managed_tag.partition("=")
+    if not key:
+        console.print("[red]❌ Error: --managed-tag needs KEY or KEY=VALUE[/red]")
+        raise typer.Exit(1)
+    return key, (value if separator else None)
+
+
+# The table orders humans' reading: strongest claims first. The JSON
+# document keeps the machine sort (region → type → id).
+_CONFIDENCE_ORDER = {"certain": 0, "likely": 1, "review": 2}
+
+
+def _display_findings(findings: list[Finding], scan_errors: list[ScanError]) -> None:
+    """Render the findings table and the counts-by-confidence summary."""
+    if findings:
+        table = Table(
+            title="Waste Findings",
+            show_header=True,
+            header_style="bold",
+            min_width=TABLE_MINIMUM_WIDTH,
+        )
+        table.add_column("Confidence")
+        table.add_column("Rule")
+        table.add_column("Type")
+        table.add_column("Region")
+        table.add_column("Resource")
+        table.add_column("Suggested action")
+        for finding in sorted(
+            findings,
+            key=lambda f: (
+                _CONFIDENCE_ORDER[f.confidence],
+                f.resource.region,
+                f.resource.resource_type,
+                f.resource.resource_id,
+            ),
+        ):
+            table.add_row(
+                finding.confidence,
+                finding.rule,
+                finding.resource.resource_type,
+                finding.resource.region,
+                finding.resource.resource_name or finding.resource.resource_id,
+                finding.suggested_action,
+            )
+        console.print(table)
+    else:
+        console.print("[green]✅ No waste found.[/green]")
+
+    counts = Counter(finding.confidence for finding in findings)
+    console.print(
+        f"\n[bold]{len(findings)} findings: {counts['certain']} certain · "
+        f"{counts['likely']} likely · {counts['review']} review[/bold]"
+    )
+    if scan_errors:
+        console.print(
+            f"[yellow]⚠ Scan partial: {len(scan_errors)} scan unit(s) failed — "
+            "findings may be incomplete (see scan.errors in the document)[/yellow]"
+        )
 
 
 if __name__ == "__main__":

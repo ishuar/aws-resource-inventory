@@ -65,6 +65,47 @@ class ScanFilters:
     all_services: bool
 
 
+def scan_block(
+    *,
+    version: str,
+    identity: CallerIdentity,
+    regions: list[str],
+    source: Literal["services", "tagging"],
+    filters: ScanFilters,
+    started_at: str,
+    duration_seconds: float,
+    errors: list[ScanError],
+) -> dict[str, Any]:
+    """The ``scan`` block both documents share (ADR-0005, ADR-0011).
+
+    One home for the shape: the inventory envelope and the waste
+    findings document state who scanned what, when, with which filters,
+    and what failed, in exactly the same vocabulary.
+    """
+    return {
+        "tool": {"name": TOOL_NAME, "version": version},
+        "account": identity.account,
+        "partition": identity.partition,
+        "regions": regions,
+        "source": source,
+        "filters": {
+            "services": filters.services,
+            "tag_key": filters.tag_key,
+            "tag_value": filters.tag_value,
+            "all_services": filters.all_services,
+        },
+        "started_at": started_at,
+        "duration_seconds": duration_seconds,
+        # Always present, [] when clean: a consumer seeing an empty
+        # list knows the scan is complete; a missing key only means
+        # the document predates ADR-0010 (additive — no version bump).
+        "errors": [
+            {"region": e.region, "service": e.service, "message": e.message}
+            for e in sorted(errors, key=lambda e: (e.region, e.service or ""))
+        ],
+    }
+
+
 def build_envelope(
     resources: list[Resource],
     *,
@@ -98,28 +139,16 @@ def build_envelope(
     by_type = Counter(record["type"] for record in records)
     return {
         "schema_version": SCHEMA_VERSION,
-        "scan": {
-            "tool": {"name": TOOL_NAME, "version": version},
-            "account": identity.account,
-            "partition": identity.partition,
-            "regions": regions,
-            "source": source,
-            "filters": {
-                "services": filters.services,
-                "tag_key": filters.tag_key,
-                "tag_value": filters.tag_value,
-                "all_services": filters.all_services,
-            },
-            "started_at": started_at,
-            "duration_seconds": duration_seconds,
-            # Always present, [] when clean: a consumer seeing an empty
-            # list knows the scan is complete; a missing key only means
-            # the document predates ADR-0010 (additive — no version bump).
-            "errors": [
-                {"region": e.region, "service": e.service, "message": e.message}
-                for e in sorted(errors, key=lambda e: (e.region, e.service or ""))
-            ],
-        },
+        "scan": scan_block(
+            version=version,
+            identity=identity,
+            regions=regions,
+            source=source,
+            filters=filters,
+            started_at=started_at,
+            duration_seconds=duration_seconds,
+            errors=errors,
+        ),
         "summary": {
             "total": len(records),
             # by_service is deliberately absent: derivable from by_type

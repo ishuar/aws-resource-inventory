@@ -190,6 +190,42 @@ def write_document(output_file: Path, serialized: str, *, ours: bool) -> None:
         document.write(serialized)
 
 
+def flatten_results(
+    results: dict[str, Any],
+    identity: CallerIdentity,
+    source: Literal["services", "tagging"],
+) -> list[Resource]:
+    """Flatten raw scan results into typed Resources via the registry.
+
+    The one dispatch from raw per-service data to ``Resource`` — the
+    envelope path and the waste path both flatten here, so a processor
+    change reaches every consumer.
+    """
+    flattened_resources: list[Resource] = []
+    for region, services in results.items():
+        for service_name, service_data in services.items():
+            if not service_data:  # Skip empty services
+                continue
+
+            if source == "tagging" and service_name not in SERVICE_SHAPED_SECTIONS:
+                # Resource Groups API data all shares one shape.
+                process_generic_service_output(
+                    service_data, region, flattened_resources, identity
+                )
+            else:
+                registration = SERVICES.get(service_name)
+                if registration is not None:
+                    registration.process_output(
+                        service_data, region, flattened_resources, identity
+                    )
+                else:
+                    # Unknown service: fall back to the generic processor.
+                    process_generic_service_output(
+                        service_data, region, flattened_resources, identity
+                    )
+    return flattened_resources
+
+
 def output_results(
     results: dict[str, Any],
     output_file: Path | None,
@@ -233,30 +269,7 @@ def output_results(
         int: The total number of flattened resources found.
     """
 
-    # Flatten results into a list of resources with the required columns
-    flattened_resources: list[Resource] = []
-
-    for region, services in results.items():
-        for service_name, service_data in services.items():
-            if not service_data:  # Skip empty services
-                continue
-
-            if source == "tagging" and service_name not in SERVICE_SHAPED_SECTIONS:
-                # Resource Groups API data all shares one shape.
-                process_generic_service_output(
-                    service_data, region, flattened_resources, identity
-                )
-            else:
-                registration = SERVICES.get(service_name)
-                if registration is not None:
-                    registration.process_output(
-                        service_data, region, flattened_resources, identity
-                    )
-                else:
-                    # Unknown service: fall back to the generic processor.
-                    process_generic_service_output(
-                        service_data, region, flattened_resources, identity
-                    )
+    flattened_resources = flatten_results(results, identity, source)
 
     # Every serialized scan is the self-describing envelope document
     # (schema_version 1, ADR-0005) — never a bare resource array.
