@@ -258,6 +258,34 @@ class TestScanElb:
         assert len(result["listener_rules"]) >= 1
         assert result["listener_rules"][0]["LoadBalancerArn"] == lb_arn
 
+    def test_target_groups_carry_target_health(self, aws_session: Any) -> None:
+        # Evidence for the waste verb's elb-no-targets rule: every target
+        # group carries its registered targets. The key is always present
+        # on a successful scan, so an empty list genuinely means "zero
+        # registered targets" — never "health not fetched".
+        self._create_alb(aws_session)
+        ec2 = aws_session.client("ec2", region_name=REGION)
+        elbv2 = aws_session.client("elbv2", region_name=REGION)
+        tg = elbv2.describe_target_groups(Names=["my-tg"])["TargetGroups"][0]
+        ami_id = ec2.describe_images(Owners=["amazon"])["Images"][0]["ImageId"]
+        instance_id = ec2.run_instances(ImageId=ami_id, MinCount=1, MaxCount=1)[
+            "Instances"
+        ][0]["InstanceId"]
+        elbv2.register_targets(
+            TargetGroupArn=tg["TargetGroupArn"], Targets=[{"Id": instance_id}]
+        )
+        elbv2.create_target_group(
+            Name="empty-tg", Protocol="HTTP", Port=80, VpcId=tg["VpcId"]
+        )
+
+        result = scan_elb(aws_session, REGION)
+
+        by_name = {t["TargetGroupName"]: t for t in result["target_groups"]}
+        assert [
+            h["Target"]["Id"] for h in by_name["my-tg"]["TargetHealthDescriptions"]
+        ] == [instance_id]
+        assert by_name["empty-tg"]["TargetHealthDescriptions"] == []
+
     def test_listeners_carry_their_tags(self, aws_session: Any) -> None:
         # A listener's only possible name is its Name tag, so a scan that
         # never fetches tags reports it nameless while the tag scan names
