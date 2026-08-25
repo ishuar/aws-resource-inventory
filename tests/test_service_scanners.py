@@ -13,6 +13,7 @@ Scanners added later get their own per-service test file
 from typing import Any
 
 import pytest
+from botocore.exceptions import EndpointConnectionError
 
 from aws_resource_inventory.services.autoscaling_service import scan_autoscaling
 from aws_resource_inventory.services.ec2_service import scan_ec2
@@ -350,6 +351,22 @@ class TestScanEcs:
         scan_ecs(aws_session, REGION)
 
         assert requested == [["TAGS"]]
+
+    def test_a_boto_failure_mid_scan_propagates(self) -> None:
+        # scan_ecs must not swallow a BotoCoreError into partial results:
+        # the caller (scan_region) owns the catch and records it as
+        # ScanError data (ADR-0010) — a connection failure must never
+        # read as "zero ECS resources".
+        class BrokenClient:
+            def get_paginator(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise EndpointConnectionError(endpoint_url="https://ecs.example.com")
+
+        class BrokenSession:
+            def client(self, *_args: Any, **_kwargs: Any) -> Any:
+                return BrokenClient()
+
+        with pytest.raises(EndpointConnectionError):
+            scan_ecs(BrokenSession(), REGION)
 
     def test_only_the_latest_two_task_definition_revisions_are_kept(
         self, aws_session: Any

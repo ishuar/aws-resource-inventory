@@ -107,6 +107,22 @@ def test_all_regions_failed_exits_one_but_still_writes_the_envelope(
     assert [e["region"] for e in envelope["scan"]["errors"]] == REGIONS
 
 
+def test_every_service_errored_in_every_region_is_no_usable_inventory(
+    fake_credentials: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The scan runs one service (s3). When it errored in every region,
+    # nothing was inventoried anywhere — that region is as wholly failed
+    # as a region-level error, so the verdict is 1, not "partial".
+    errors = [
+        ScanError(region=region, service="s3", message="AccessDenied")
+        for region in REGIONS
+    ]
+    result = run_scan_with(fake_credentials, ({}, errors), tmp_path / "scan.json")
+
+    assert result.exit_code == 1, result.output
+    assert written_envelope(tmp_path)["summary"]["total"] == 0
+
+
 def test_one_region_wholly_failed_is_partial_not_total(
     fake_credentials: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

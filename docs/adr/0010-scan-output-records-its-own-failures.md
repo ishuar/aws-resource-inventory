@@ -41,8 +41,11 @@ states its own completeness.**
    partial (some scan units errored, envelope written), `1` no usable
    inventory — pre-scan hard failure or every region wholly failed
    (the envelope is still written first: evidence first, verdict
-   second). `2` is never used: click owns it for usage errors.
-   `--refresh` mode keeps looping regardless of per-scan failures.
+   second). A region is wholly failed when it errored region-wide
+   (`service: null`) **or** every service scanned in it errored —
+   either way nothing was inventoried there. `2` is never used: click
+   owns it for usage errors. `--refresh` mode keeps looping regardless
+   of per-scan failures.
 
 ## Consequences
 

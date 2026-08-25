@@ -115,42 +115,36 @@ def scan_ecs(session: Any, region: str) -> ScanResult:
         "capacity_providers": [],
     }
 
-    try:
-        result["clusters"] = _clusters(ecs_client)
+    result["clusters"] = _clusters(ecs_client)
 
-        service_groups = map_parallel(
-            partial(_services_of, ecs_client), result["clusters"], max_workers=2
-        )
-        result["services"] = [svc for group in service_groups for svc in group]
+    service_groups = map_parallel(
+        partial(_services_of, ecs_client), result["clusters"], max_workers=2
+    )
+    result["services"] = [svc for group in service_groups for svc in group]
 
-        families = collect_pages(
-            ecs_client, "list_task_definition_families", "families"
-        )
-        arn_groups = map_parallel(
-            partial(_latest_task_definition_arns, ecs_client),
-            families,
-            max_workers=ECS_TASK_DEF_WORKERS,
-        )
-        result["task_definitions"] = map_parallel(
-            partial(_described_task_definition, ecs_client),
-            [arn for group in arn_groups for arn in group],
-            max_workers=ECS_TASK_DEF_WORKERS,
-        )
+    families = collect_pages(ecs_client, "list_task_definition_families", "families")
+    arn_groups = map_parallel(
+        partial(_latest_task_definition_arns, ecs_client),
+        families,
+        max_workers=ECS_TASK_DEF_WORKERS,
+    )
+    result["task_definitions"] = map_parallel(
+        partial(_described_task_definition, ecs_client),
+        [arn for group in arn_groups for arn in group],
+        max_workers=ECS_TASK_DEF_WORKERS,
+    )
 
-        if result["clusters"]:
-            try:
-                # describe_capacity_providers has no paginator, and it
-                # returns tags only when include asks for them — without
-                # this a Name-tagged provider is nameless under `scan`
-                # and named under `scan --tag-key`.
-                result["capacity_providers"] = ecs_client.describe_capacity_providers(
-                    include=["TAGS"]
-                ).get("capacityProviders", [])
-            except (ClientError, BotoCoreError) as e:
-                logger.warning("Could not list capacity providers: %s", e)
-
-    except BotoCoreError as e:
-        logger.error("ECS scan failed in region %s: %s", region, e)
+    if result["clusters"]:
+        try:
+            # describe_capacity_providers has no paginator, and it
+            # returns tags only when include asks for them — without
+            # this a Name-tagged provider is nameless under `scan`
+            # and named under `scan --tag-key`.
+            result["capacity_providers"] = ecs_client.describe_capacity_providers(
+                include=["TAGS"]
+            ).get("capacityProviders", [])
+        except (ClientError, BotoCoreError) as e:
+            logger.warning("Could not list capacity providers: %s", e)
 
     return finish("ecs", region, result)
 
