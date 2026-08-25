@@ -18,7 +18,6 @@ from aws_resource_inventory.services.registry import SERVICES
 from .arn import extract_resource_id_from_arn
 from .envelope import ScanFilters, build_envelope, tool_version
 from .logging import get_logger
-from .paths import default_output_dir
 from .records import CallerIdentity, Resource, name_from_tags
 from .resource_groups_utils import SERVICE_SHAPED_SECTIONS
 
@@ -69,19 +68,27 @@ def create_aws_resources_table(
     return table
 
 
-def ensure_output_directory(output_file: Path) -> None:
+def ensure_output_directory(output_file: Path, *, ours: bool) -> None:
     """Ensure the output directory exists, create if it doesn't.
 
-    Our own default directory is made owner-only; a directory the user
-    named with ``--output`` is left exactly as they have it. mkdir
-    applies its mode only when it creates the directory, so the chmod is
-    what actually holds the guarantee (ADR-0009).
+    ``ours`` states whether we chose the path — the caller always knows
+    (it applied the default). It is declared rather than recovered by
+    comparing against ``default_output_dir()``, because two spellings of
+    one directory compare unequal, and the comparison decides whether
+    the hardening runs at all.
+
+    Our own directory is made owner-only; a directory the user named
+    with ``--output`` gets the mode any other tool would give it, on
+    creation as much as after. mkdir applies its mode only when it
+    actually creates the directory, so the chmod is what holds the
+    guarantee for ours (ADR-0009).
     """
     output_dir = output_file.parent
-    ours = output_dir == default_output_dir()
     if not output_dir.exists():
         try:
-            output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # 0o777 is masked by umask into the usual 0o755: their
+            # directory, their mode. Creating it does not make it ours.
+            output_dir.mkdir(parents=True, exist_ok=True, mode=0o700 if ours else 0o777)
             console.print(f"[dim]Created output directory: {output_dir}[/dim]")
         except Exception as e:
             console.print(
@@ -89,7 +96,15 @@ def ensure_output_directory(output_file: Path) -> None:
             )
             raise
     if ours:
-        output_dir.chmod(0o700)
+        try:
+            output_dir.chmod(0o700)
+        except OSError as e:
+            # The scan has already run and the document is written 0600
+            # regardless, so this is said out loud rather than raised —
+            # losing finished results over it would be the worse bug.
+            console.print(
+                f"[yellow]Could not restrict {output_dir} to owner-only: {e}[/yellow]"
+            )
 
 
 def process_generic_service_output(
@@ -147,8 +162,13 @@ def process_generic_service_output(
             )
 
 
-def write_document(output_file: Path, serialized: str) -> None:
+def write_document(output_file: Path, serialized: str, *, ours: bool) -> None:
     """Write the JSON document, owner-only when we chose the path.
+
+    ``ours`` is declared by the caller for the same reason it is in
+    ``ensure_output_directory``: the directory and the document must
+    agree about who owns the path, and a path comparison can disagree
+    with itself across two spellings of one directory.
 
     A document at our default path gets 0o600 for the same reason cache
     entries do (ADR-0008): the parent directory is the outer guard, and
@@ -161,7 +181,7 @@ def write_document(output_file: Path, serialized: str) -> None:
     umask can only clear permission bits, never set them, so the
     document is never briefly world-readable.
     """
-    if output_file.parent != default_output_dir():
+    if not ours:
         output_file.write_text(serialized)
         return
 
@@ -177,6 +197,7 @@ def output_results(
     *,
     identity: CallerIdentity,
     source: Literal["services", "tagging"],
+    output_is_ours: bool,
     regions: list[str],
     filters: ScanFilters,
     started_at: str,
@@ -191,6 +212,11 @@ def output_results(
 
     ``identity`` is the scanning caller's account + partition (from STS);
     processors need it to construct the ARNs the AWS APIs do not return.
+
+    ``output_is_ours`` states whether ``output_file`` is the path we
+    generated rather than one the user named with ``--output`` — the
+    caller always knows (it applied the default). Only a path we chose
+    is hardened to owner-only.
 
     ``source`` states which scan path produced ``results`` — the caller
     always knows (it chose the path). "tagging" results are Resource
@@ -252,8 +278,8 @@ def output_results(
         table = create_aws_resources_table(flattened_resources, debug, identity)
         console.print(table)
 
-        ensure_output_directory(output_file)
-        write_document(output_file, serialized)
+        ensure_output_directory(output_file, ours=output_is_ours)
+        write_document(output_file, serialized, ours=output_is_ours)
         console.print(f"[green]Data also saved to {output_file}[/green]")
 
     return len(flattened_resources)

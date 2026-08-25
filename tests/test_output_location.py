@@ -15,18 +15,33 @@ Pinned here:
 
 import os
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from aws_resource_inventory.cli import _generate_output_filename
+from aws_resource_inventory.lib.cache import default_cache_dir
 from aws_resource_inventory.lib.outputs import (
     ensure_output_directory,
     write_document,
 )
-from aws_resource_inventory.lib.paths import default_output_dir
+from aws_resource_inventory.lib.paths import default_output_dir, user_dir
 
 REGION = "eu-central-1"
+
+
+@pytest.fixture(autouse=True)
+def _fixed_umask() -> Iterator[None]:
+    """Pin umask for the permission assertions, then put it back.
+
+    ``os.umask`` is process-global with no getter that does not also
+    set, so a test that leaves it changed silently rewrites the file
+    modes every later test observes.
+    """
+    original = os.umask(0o022)
+    yield
+    os.umask(original)
 
 
 class TestDefaultOutputDir:
@@ -54,6 +69,19 @@ class TestDefaultOutputDir:
         monkeypatch.delenv("XDG_DATA_HOME", raising=False)
         shared_tmp = Path(tempfile.gettempdir()).resolve()
         assert shared_tmp not in default_output_dir().resolve().parents
+
+    def test_a_relative_xdg_value_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The XDG spec: a value that is not an absolute path is invalid
+        # and must be ignored. Honouring one would put the account
+        # inventory under whatever directory the scan was run from.
+        monkeypatch.setenv("XDG_DATA_HOME", "relative-data")
+        monkeypatch.setenv("XDG_CACHE_HOME", "relative-cache")
+
+        assert default_output_dir().is_absolute()
+        assert default_cache_dir().is_absolute()
+        assert user_dir("XDG_DATA_HOME", Path.home()).is_absolute()
 
     def test_carries_the_installed_package_name(
         self, monkeypatch: pytest.MonkeyPatch
@@ -93,9 +121,8 @@ class TestOutputDirectoryPermissions:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
-        os.umask(0o022)
 
-        ensure_output_directory(default_output_dir() / "scan.json")
+        ensure_output_directory(default_output_dir() / "scan.json", ours=True)
 
         assert default_output_dir().stat().st_mode & 0o777 == 0o700
 
@@ -108,7 +135,7 @@ class TestOutputDirectoryPermissions:
         our_dir.mkdir(parents=True)
         our_dir.chmod(0o777)
 
-        ensure_output_directory(our_dir / "scan.json")
+        ensure_output_directory(our_dir / "scan.json", ours=True)
 
         assert our_dir.stat().st_mode & 0o777 == 0o700
 
@@ -122,9 +149,57 @@ class TestOutputDirectoryPermissions:
         theirs.mkdir()
         theirs.chmod(0o755)
 
-        ensure_output_directory(theirs / "scan.json")
+        ensure_output_directory(theirs / "scan.json", ours=False)
 
         assert theirs.stat().st_mode & 0o777 == 0o755
+
+    def test_a_user_named_directory_is_created_with_the_usual_mode(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Creating it does not make it ours. A directory the user named
+        # gets the mode any other tool would give it, not 0700.
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        theirs = tmp_path / "theirs-new"
+
+        ensure_output_directory(theirs / "scan.json", ours=False)
+
+        assert theirs.stat().st_mode & 0o777 == 0o755
+
+    def test_ownership_follows_the_caller_not_the_path_spelling(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # The caller knows whether it chose the path; comparing strings
+        # does not. This spelling names our own directory, so a path
+        # comparison would call it ours and silently retighten a
+        # directory the user asked for by name.
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        our_dir = default_output_dir()
+        our_dir.mkdir(parents=True)
+        our_dir.chmod(0o755)
+        (tmp_path / "xdg" / "sibling").mkdir()
+        alias = tmp_path / "xdg" / "sibling" / ".." / "aws-resource-inventory"
+
+        ensure_output_directory(alias / "scan.json", ours=False)
+
+        assert our_dir.stat().st_mode & 0o777 == 0o755
+
+    def test_a_chmod_failure_does_not_lose_a_finished_scan(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # The scan has already run by the time this is called, and the
+        # document itself is written 0600 either way. Failing to tighten
+        # the directory is worth saying out loud, not worth discarding
+        # the results over.
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        our_dir = default_output_dir()
+        our_dir.mkdir(parents=True)
+
+        def refuse(self: Path, mode: int) -> None:
+            raise PermissionError("read-only file system")
+
+        monkeypatch.setattr(Path, "chmod", refuse)
+
+        ensure_output_directory(our_dir / "scan.json", ours=True)
 
 
 class TestDocumentPermissions:
@@ -140,11 +215,10 @@ class TestDocumentPermissions:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
-        os.umask(0o022)
         document = default_output_dir() / "scan.json"
-        ensure_output_directory(document)
+        ensure_output_directory(document, ours=True)
 
-        write_document(document, '{"schema_version": 1}')
+        write_document(document, '{"schema_version": 1}', ours=True)
 
         assert document.stat().st_mode & 0o777 == 0o600
 
@@ -154,11 +228,10 @@ class TestDocumentPermissions:
         # --output names the path; forcing 0600 on a file the user asked
         # for somewhere specific would be surprising, not secure.
         monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
-        os.umask(0o022)
         theirs = tmp_path / "theirs"
         theirs.mkdir()
         document = theirs / "scan.json"
 
-        write_document(document, '{"schema_version": 1}')
+        write_document(document, '{"schema_version": 1}', ours=False)
 
         assert document.stat().st_mode & 0o777 == 0o644

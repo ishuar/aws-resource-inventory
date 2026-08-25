@@ -542,7 +542,7 @@ display_usage() {
     print_message "PURPLE" "💡 Tips:"
     echo "  • Use '--dry-run' to see what would be scanned without actually running"
     echo "  • Use '--no-cache' to force fresh data retrieval"
-    echo "  • Check logs in /tmp/aws_resource_inventory/ for debugging"
+    echo "  • Check logs in ./.debug_logs/ for debugging"
     echo
 }
 

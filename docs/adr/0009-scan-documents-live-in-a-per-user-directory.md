@@ -38,14 +38,29 @@ ADR-0008's own reasoning applied to it verbatim and did not mention it.
    `mkdir` applies its mode only when it actually creates the directory
    (the gap ADR-0008 closed for the cache). A directory the user names
    with `--output` is left exactly as they have it — their path, their
-   permissions.
-4. **A document at our default path is written `0o600`;** one at a path
+   permissions — and creating it does not make it ours: it gets the
+   mode any other tool would give it.
+4. **Ownership is declared by the caller, never inferred from the
+   path.** The CLI knows whether it applied the default; it says so.
+   Recovering it by comparing against `default_output_dir()` looks
+   equivalent and is not — two spellings of one directory compare
+   unequal, and that comparison decides whether the hardening runs at
+   all. This is the house rule the scan `source` already follows.
+5. **A relative `XDG_*_HOME` is ignored,** as the XDG Base Directory
+   spec requires. Honouring one would put an account's inventory under
+   whatever directory the scan happened to run from — the exposure this
+   ADR exists to close, reintroduced by an environment variable.
+6. **Failing to tighten the directory warns; it does not raise.** By
+   the time we chmod, the scan has run and the document is written
+   `0o600` regardless. Discarding finished results over a directory
+   mode would be the worse bug — but it is never silent.
+7. **A document at our default path is written `0o600`;** one at a path
    the user named is written normally. Same reasoning ADR-0008 gave for
    cache entries — the directory is the outer guard, and a file left
    world-readable is exposed the moment it is copied or that guard is
    weakened. `os.open` with an explicit mode rather than
    write-then-`chmod`, so it is never briefly world-readable.
-5. **The fallback is the same on every platform.** No `~/Library`
+8. **The fallback is the same on every platform.** No `~/Library`
    branch on macOS, matching ADR-0008: one path to document.
 
 ## Consequences
@@ -62,9 +77,11 @@ ADR-0008's own reasoning applied to it verbatim and did not mention it.
   to produce one meant for sharing.
 - The README now names the default path. "An auto-generated path" was
   not a location a user could act on.
-- `/tmp` no longer appears in any runtime path. `scripts/e2e-diff.sh`
-  still uses `mktemp -d` for its throwaway worktrees, which is correct:
-  those are ephemeral build artifacts, not account data.
+- `/tmp` no longer appears in any runtime path, `setup.sh` included —
+  its tips block pointed there for debug logs, which have never lived
+  anywhere but `./.debug_logs/`. `scripts/e2e-diff.sh` still uses
+  `mktemp -d` for its throwaway worktrees, which is correct: those are
+  ephemeral build artifacts, not account data.
 
 ## Alternatives rejected
 

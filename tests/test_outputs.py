@@ -73,6 +73,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            output_is_ours=False,
             **ENVELOPE_KWARGS,
         )
 
@@ -104,6 +105,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            output_is_ours=False,
             **ENVELOPE_KWARGS,
         )
 
@@ -123,6 +125,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            output_is_ours=False,
             **ENVELOPE_KWARGS,
         )
         assert out.exists()
@@ -137,6 +140,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            output_is_ours=False,
             **ENVELOPE_KWARGS,
         )
 
@@ -159,6 +163,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            output_is_ours=False,
             **ENVELOPE_KWARGS,
         )
         assert count == 0
@@ -175,6 +180,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="tagging",
+            output_is_ours=False,
             **ENVELOPE_KWARGS,
         )
 
@@ -210,6 +216,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="tagging",
+            output_is_ours=False,
             **ENVELOPE_KWARGS,
         )
 
@@ -228,6 +235,7 @@ class TestOutputResults:
             debug=False,
             identity=IDENTITY,
             source="services",
+            output_is_ours=False,
             **ENVELOPE_KWARGS,
         )
 
@@ -277,6 +285,7 @@ class TestTaggingPathHybridResults:
             debug=False,
             identity=IDENTITY,
             source="tagging",
+            output_is_ours=False,
             **ENVELOPE_KWARGS,
         )
 

@@ -572,6 +572,11 @@ def scan_command(
                 output_file, tag_key, tag_value, region_list, services
             )
         )
+        # We chose the path exactly where the user named none — the
+        # same condition _generate_output_filename branches on above.
+        # --output names a path the user owns: their permissions, not
+        # ours to tighten behind their back.
+        output_is_ours = output_file is None
 
         # Check for shutdown before processing results
         if shutdown_requested.is_set():
@@ -603,6 +608,7 @@ def scan_command(
             debug,
             identity=caller_identity,
             source=scan_source,
+            output_is_ours=output_is_ours,
             regions=region_list,
             filters=scan_filters,
             started_at=started_at,
@@ -829,7 +835,9 @@ def _handle_dry_run(
     elif output_file:
         console.print(f"  • [bold]Output file:[/bold] {output_file}")
     else:
-        console.print("  • [bold]Output file:[/bold] Auto-generated")
+        console.print(
+            f"  • [bold]Output file:[/bold] auto-generated under {default_output_dir()}"
+        )
 
     console.print(
         "\n[bold green]✅ Dry run completed. Use without --dry-run to execute the actual scan.[/bold green]"
