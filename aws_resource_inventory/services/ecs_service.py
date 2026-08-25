@@ -12,7 +12,7 @@ Tag-based filtering is handled centrally by the Resource Groups Tagging API.
 from functools import partial
 from typing import Any, cast
 
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import ClientError
 
 from aws_resource_inventory.lib.arn import extract_resource_id_from_arn
 from aws_resource_inventory.lib.clients import get_scan_client
@@ -135,16 +135,13 @@ def scan_ecs(session: Any, region: str) -> ScanResult:
     )
 
     if result["clusters"]:
-        try:
-            # describe_capacity_providers has no paginator, and it
-            # returns tags only when include asks for them — without
-            # this a Name-tagged provider is nameless under `scan`
-            # and named under `scan --tag-key`.
-            result["capacity_providers"] = ecs_client.describe_capacity_providers(
-                include=["TAGS"]
-            ).get("capacityProviders", [])
-        except (ClientError, BotoCoreError) as e:
-            logger.warning("Could not list capacity providers: %s", e)
+        # describe_capacity_providers has no paginator, and it
+        # returns tags only when include asks for them — without
+        # this a Name-tagged provider is nameless under `scan`
+        # and named under `scan --tag-key`.
+        result["capacity_providers"] = ecs_client.describe_capacity_providers(
+            include=["TAGS"]
+        ).get("capacityProviders", [])
 
     return finish("ecs", region, result)
 

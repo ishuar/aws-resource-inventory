@@ -13,7 +13,7 @@ Scanners added later get their own per-service test file
 from typing import Any
 
 import pytest
-from botocore.exceptions import EndpointConnectionError
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 from aws_resource_inventory.services.autoscaling_service import scan_autoscaling
 from aws_resource_inventory.services.ec2_service import scan_ec2
@@ -351,6 +351,29 @@ class TestScanEcs:
         scan_ecs(aws_session, REGION)
 
         assert requested == [["TAGS"]]
+
+    def test_a_capacity_provider_failure_propagates(
+        self, aws_session: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An AccessDenied on describe_capacity_providers fails the whole
+        # capacity-provider section — not an expected per-item condition —
+        # so swallowing it would read as "zero capacity providers"
+        # (ADR-0010). scan_region owns the catch and records ScanError data.
+        from moto.ecs.responses import EC2ContainerServiceResponse
+
+        def denied(self: Any) -> Any:
+            raise ClientError(
+                {"Error": {"Code": "AccessDeniedException", "Message": "denied"}},
+                "DescribeCapacityProviders",
+            )
+
+        monkeypatch.setattr(
+            EC2ContainerServiceResponse, "describe_capacity_providers", denied
+        )
+        aws_session.client("ecs", region_name=REGION).create_cluster(clusterName="prod")
+
+        with pytest.raises(ClientError):
+            scan_ecs(aws_session, REGION)
 
     def test_a_boto_failure_mid_scan_propagates(self) -> None:
         # scan_ecs must not swallow a BotoCoreError into partial results:
