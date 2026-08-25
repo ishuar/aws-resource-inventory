@@ -49,9 +49,13 @@ configuration panel, the progress display, and every log line.
 - A latent bug is fixed on the way: `AWSLogger.configure` early-returned
   whenever the logger was already configured and `debug` was false, so
   it ignored its own arguments. Importing any module that calls
-  `get_logger()` configures the logger, so the CLI's own call was always
-  the second one and never took effect. The guard now reconfigures when
-  a setting that shapes the handlers actually changes.
+  `get_logger()` configured the logger, so the CLI's own call was always
+  the second one and never took effect. This ADR taught the guard to
+  reconfigure when a handler-shaping setting changed. *Amended
+  2026-08-26:* the follow-up fix removed the cause instead —
+  `get_logger()` no longer configures at import time and the guard is
+  deleted. `configure_logging` is the only configurator; every call
+  applies every argument, last call wins.
 - The terminal table is now unconditional for file output. Anyone who
   used `--format json` to suppress it should use `--output -`.
 

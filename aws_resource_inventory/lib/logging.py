@@ -78,8 +78,6 @@ class AWSLogger:
         self._verbose_mode = False
         self._log_file: Path | None = None
         self._progress_console: Console | None = None
-        self._is_configured = False
-        self._log_to_stderr = False
 
     def configure(
         self,
@@ -94,16 +92,9 @@ class AWSLogger:
         JSON document and nothing else. Diagnostics move to stderr rather
         than being dropped: a scan that fails still has to say why.
         """
-        # Importing any module that calls get_logger() configures this
-        # logger with defaults, so the CLI's own call is always the
-        # second one. Reconfigure whenever a setting that shapes the
-        # handlers actually changes: debug adds the file handler,
-        # log_to_stderr moves the console. A guard that ignored its own
-        # arguments is what let --output - keep logging to stdout.
-        if self._is_configured and not debug and log_to_stderr == self._log_to_stderr:
-            return
-
-        self._log_to_stderr = log_to_stderr
+        # Every call applies every argument — last call wins. A guard
+        # that skipped "already configured" is what let --output - keep
+        # logging to stdout (#61, ADR-0007).
         self._debug_mode = debug
         self._verbose_mode = verbose
         self._log_file = log_file
@@ -157,8 +148,6 @@ class AWSLogger:
         # Enable boto3 request/response logging in debug mode
         if debug:
             self._enable_boto3_logging()
-
-        self._is_configured = True
 
         if debug:
             self.logger.debug("Simplified logging configured")
@@ -461,6 +450,10 @@ def get_logger(name: str = "aws-inventory") -> AWSLogger:
     """
     Get logger instance - unified interface for all AWS scanner logging.
 
+    Never configures: modules fetch the logger at import time, and any
+    configuration here would lock in handler choices before the CLI has
+    parsed a flag. configure_logging() is the only configurator.
+
     Args:
         name: Logger name (for backward compatibility, ignored)
 
@@ -471,8 +464,6 @@ def get_logger(name: str = "aws-inventory") -> AWSLogger:
 
     if _aws_logger is None:
         _aws_logger = AWSLogger(name)
-        # Configure with defaults if not already configured
-        _aws_logger.configure(debug=False)
 
     return _aws_logger
 
