@@ -119,7 +119,7 @@ class TestScanRegion:
         def on_progress(completed: int, total: int, service: str, region: str) -> None:
             progress_calls.append((completed, total, service, region))
 
-        region, results, duration, errors = scan_region(
+        scan = scan_region(
             aws_session,
             REGION,
             services=["s3"],
@@ -127,22 +127,22 @@ class TestScanRegion:
             progress_callback=on_progress,
         )
 
-        assert region == REGION
-        assert [b["Name"] for b in results["s3"]["buckets"]] == ["region-bucket"]
-        assert duration >= 0
-        assert errors == []
+        assert scan.region == REGION
+        assert [b["Name"] for b in scan.results["s3"]["buckets"]] == ["region-bucket"]
+        assert scan.duration_seconds >= 0
+        assert scan.errors == []
         assert progress_calls == [(1, 1, "s3", REGION)]
 
     def test_unsupported_services_are_silently_filtered(self, aws_session: Any) -> None:
         progress_calls: list[tuple[int, int, str, str]] = []
 
-        _, results, _, _ = scan_region(
+        results = scan_region(
             aws_session,
             REGION,
             services=["s3", "dynamodb", "bogus"],
             use_cache=False,
             progress_callback=lambda *args: progress_calls.append(args),
-        )
+        ).results
 
         assert "dynamodb" not in results
         assert "bogus" not in results
@@ -155,9 +155,9 @@ class TestScanRegion:
         # Characterization: an empty scan result ({} or all-empty values is
         # still truthy for dicts with keys, but a falsy {} is dropped).
         # s3 with no buckets returns {"buckets": []} (truthy) and is kept.
-        _, results, _, _ = scan_region(
+        results = scan_region(
             aws_session, REGION, services=["s3"], use_cache=False
-        )
+        ).results
         assert results["s3"] == {"buckets": []}
 
     def test_pre_set_shutdown_event_stops_before_collecting_results(
@@ -166,13 +166,13 @@ class TestScanRegion:
         shutdown = threading.Event()
         shutdown.set()
 
-        _, results, _, _ = scan_region(
+        results = scan_region(
             aws_session,
             REGION,
             services=["s3"],
             use_cache=False,
             shutdown_event=shutdown,
-        )
+        ).results
 
         assert results == {}
 
@@ -187,14 +187,12 @@ class TestScanRegion:
         )
 
         broken = BrokenForOneService(aws_session, broken_service="ec2")
-        _, results, _, errors = scan_region(
-            broken, REGION, services=["s3", "ec2"], use_cache=False
-        )
+        scan = scan_region(broken, REGION, services=["s3", "ec2"], use_cache=False)
 
-        assert [b["Name"] for b in results["s3"]["buckets"]] == ["survivor-bucket"]
-        assert "ec2" not in results
-        assert [(e.region, e.service) for e in errors] == [(REGION, "ec2")]
-        assert "AccessDenied" in errors[0].message
+        assert [b["Name"] for b in scan.results["s3"]["buckets"]] == ["survivor-bucket"]
+        assert "ec2" not in scan.results
+        assert [(e.region, e.service) for e in scan.errors] == [(REGION, "ec2")]
+        assert "AccessDenied" in scan.errors[0].message
 
 
 class BrokenForOneService:

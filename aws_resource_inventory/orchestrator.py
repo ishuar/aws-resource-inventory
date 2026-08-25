@@ -423,13 +423,12 @@ def perform_scan(
                 completed_futures += 1
 
                 try:
-                    region_name, region_results, scan_duration, region_errors = (
-                        future.result(timeout=300)
-                    )
-                    scan_errors.extend(region_errors)
-                    total_scan_time += scan_duration
-                    if region_results:
-                        all_results[region_name] = region_results
+                    region_scan = future.result(timeout=300)
+                    region_name = region_scan.region
+                    scan_errors.extend(region_scan.errors)
+                    total_scan_time += region_scan.duration_seconds
+                    if region_scan.results:
+                        all_results[region_name] = region_scan.results
                         if progress and main_task is not None:
                             # Update the region task to show completion
                             if region_name in region_tasks:

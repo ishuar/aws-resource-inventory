@@ -184,25 +184,25 @@ class TestScanAllServicesWithTags:
     def test_returns_region_results_and_duration(self, aws_session: Any) -> None:
         create_tagged_fixtures(aws_session)
 
-        region, results, duration, errors = scan_all_services_with_tags(
+        scan = scan_all_services_with_tags(
             aws_session, REGION, "env", "prod", use_cache=False
         )
 
-        assert region == REGION
-        assert "s3" in results
-        assert duration >= 0
-        assert errors == []
+        assert scan.region == REGION
+        assert "s3" in scan.results
+        assert scan.duration_seconds >= 0
+        assert scan.errors == []
 
     def test_results_are_cached_for_the_tag_combination(self, aws_session: Any) -> None:
         create_tagged_fixtures(aws_session)
 
-        _, first, _, _ = scan_all_services_with_tags(
+        first = scan_all_services_with_tags(
             aws_session, REGION, "env", "prod", use_cache=True
-        )
+        ).results
         assert first
 
         # A session that cannot scan: only a cache hit can produce results.
-        _, cached, _, _ = scan_all_services_with_tags(
+        cached = scan_all_services_with_tags(
             None, REGION, "env", "prod", use_cache=True
-        )
+        ).results
         assert cached == first
