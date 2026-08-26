@@ -5,7 +5,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "aws-resource-inventory"
-version = "0.1.1"
+version = "0.2.0"
 description = "AWS multi-service resource inventory with tag-based filtering and advanced optimizations"
 authors = [
     {name = "Ishan Sharma"}
