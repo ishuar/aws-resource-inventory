@@ -29,6 +29,7 @@ from aws_resource_inventory.lib.outputs import (
 from aws_resource_inventory.lib.paths import default_output_dir, user_dir
 
 REGION = "eu-central-1"
+ACCOUNT = "123456789012"
 
 
 @pytest.fixture(autouse=True)
@@ -96,10 +97,25 @@ class TestGeneratedOutputPath:
     ) -> None:
         monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
 
-        generated = _generate_output_filename(None, None, None, [REGION], ["s3"])
+        generated = _generate_output_filename(
+            None, None, None, [REGION], ["s3"], ACCOUNT
+        )
 
         assert generated.parent == default_output_dir()
         assert generated.name.endswith(".json")
+
+    def test_default_filename_starts_with_the_account_id(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Scans of several accounts land in the same per-user directory;
+        # the account id in the name is what tells the documents apart.
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+
+        generated = _generate_output_filename(
+            None, None, None, [REGION], ["ec2"], ACCOUNT
+        )
+
+        assert generated.name.startswith(f"{ACCOUNT}-aws-resources-")
 
     def test_default_path_is_never_under_the_shared_temp_directory(
         self, monkeypatch: pytest.MonkeyPatch
@@ -107,13 +123,18 @@ class TestGeneratedOutputPath:
         monkeypatch.delenv("XDG_DATA_HOME", raising=False)
         shared_tmp = Path(tempfile.gettempdir()).resolve()
 
-        generated = _generate_output_filename(None, None, None, [REGION], ["s3"])
+        generated = _generate_output_filename(
+            None, None, None, [REGION], ["s3"], ACCOUNT
+        )
 
         assert shared_tmp not in generated.resolve().parents
 
     def test_an_explicit_path_is_returned_untouched(self, tmp_path: Path) -> None:
         chosen = tmp_path / "somewhere" / "mine.json"
-        assert _generate_output_filename(chosen, None, None, [REGION], ["s3"]) == chosen
+        assert (
+            _generate_output_filename(chosen, None, None, [REGION], ["s3"], ACCOUNT)
+            == chosen
+        )
 
 
 class TestOutputDirectoryPermissions:

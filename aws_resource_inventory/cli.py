@@ -562,7 +562,12 @@ def scan_command(
             None
             if to_stdout
             else _generate_output_filename(
-                output_file, tag_key, tag_value, region_list, services
+                output_file,
+                tag_key,
+                tag_value,
+                region_list,
+                services,
+                caller_identity.account,
             )
         )
         # We chose the path exactly where the user named none — the
@@ -928,10 +933,13 @@ def _generate_output_filename(
     tag_value: str | None,
     region_list: list[str],
     services: list[str],
+    account: str,
 ) -> Path:
     """Generate output filename dynamically if not provided."""
     if output_file is None:
-        parts = ["aws-resources"]
+        # Scans of several accounts share one per-user directory; the
+        # account id is the only part of the name that tells them apart.
+        parts = [account, "aws-resources"]
         if tag_key:
             parts.append(str(tag_key))
         if tag_value:
