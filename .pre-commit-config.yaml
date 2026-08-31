@@ -12,7 +12,7 @@ repos:
         language_version: python3.13
 
   - repo: https://github.com/PyCQA/isort
-    rev: 9.0.0b5
+    rev: 9.0.1
     hooks:
       - id: isort
         name: isort (python)
@@ -20,7 +20,7 @@ repos:
 
   # --- Linting ---
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.4
+    rev: v0.16.5
     hooks:
       - id: ruff-check
         name: ruff (python linter)
