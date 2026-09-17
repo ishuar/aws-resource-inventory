@@ -11,8 +11,10 @@ reaches for these helpers where they help.
 
 Invariants (relied on by tests/test_engine.py and every caller):
 
-- ``collect_pages`` always paginates via ``get_paginator``; items keep
-  page order; boto errors raise — guarding is the caller's decision.
+- ``collect_pages`` paginates via ``get_paginator`` unless the spec
+  declares ``paginated=False`` (then the single response is the only
+  page); items keep page order; boto errors raise — guarding is the
+  caller's decision.
 - ``run_parallel`` returns EXACTLY the task keys, in insertion order,
   every value a list. Every exception propagates: scan_region records
   it as ScanError data (ADR-0010), so a denied describe never reads as
@@ -25,8 +27,8 @@ Invariants (relied on by tests/test_engine.py and every caller):
   exists (any key); no filter = always True.
 
 Guard rail (agreed design rule): ``Describe`` never grows beyond
-``op / result_key / kwargs / flatten``. Anything needing more is a
-plain function calling ``collect_pages``.
+``op / result_key / kwargs / flatten / paginated``. Anything needing
+more is a plain function calling ``collect_pages``.
 """
 
 from collections.abc import Callable, Iterable, Mapping
@@ -48,12 +50,21 @@ _R = TypeVar("_R")
 
 @dataclass(frozen=True)
 class Describe:
-    """One paginated call filling one result key — the common case."""
+    """One describe call filling one result key — the common case.
+
+    ``paginated=False`` is for the few operations botocore has no
+    paginator for (ec2 describe_addresses): the API returns everything
+    in one response, so the engine calls the operation directly. The
+    flag is declared on the spec — never sniffed from botocore — so a
+    botocore upgrade can't change scan behaviour (a paginator appearing
+    later is adopted by deliberately flipping the flag).
+    """
 
     op: str
     result_key: str
     kwargs: Mapping[str, Any] = field(default_factory=dict)
     flatten: Callable[[dict[str, Any]], ResourceList] | None = None
+    paginated: bool = True
 
 
 def collect_pages(
@@ -62,9 +73,17 @@ def collect_pages(
     result_key: str,
     *,
     flatten: Callable[[dict[str, Any]], ResourceList] | None = None,
+    paginated: bool = True,
     **kwargs: Any,
 ) -> ResourceList:
-    """Collect every page of a paginated operation, in page order."""
+    """Collect every page of an operation, in page order.
+
+    ``paginated=False`` treats the single response as the only page —
+    see ``Describe``.
+    """
+    if not paginated:
+        page = getattr(client, op)(**kwargs)
+        return list(flatten(page) if flatten else page[result_key])
     resources: ResourceList = []
     paginator = client.get_paginator(op)
     for page in paginator.paginate(**kwargs):
@@ -160,6 +179,7 @@ def scan_keyed(
             spec.op,
             spec.result_key,
             flatten=spec.flatten,
+            paginated=spec.paginated,
             **spec.kwargs,
         )
         for key, spec in specs.items()
