@@ -50,7 +50,7 @@ Confidence semantics:
 
 | Level | Meaning | Example |
 |---|---|---|
-| `certain` | The resource state proves non-use | EBS volume with `Status: available` |
+| `certain` | The resource state proves non-use | EBS volume with `State: available` |
 | `likely` | Strong signal, small chance of false positive | Instance stopped > 90 days |
 | `review` | Worth a human look, no claim of waste | Resource missing the managed tag |
 
@@ -105,7 +105,9 @@ aws-inventory waste --regions eu-central-1 --output -
 `waste` **runs the scan in-process** (decision 14): the scan JSON cannot
 feed it, because the envelope deliberately carries identity only — the
 state a rule reads (`State`, `AssociationId`, `CreateTime`) exists only in
-the raw describe data of a live run. Evidence is as fresh as the run.
+the raw describe data of a live run. Evidence is as fresh as the run,
+bounded by the scan cache TTL (10 minutes); `--no-cache` forces a live
+fetch.
 
 Terminal output: a findings table ordered `certain` → `likely` → `review`,
 then a summary line of counts by confidence (`9 findings: 2 certain ·
@@ -172,7 +174,7 @@ single fetch layer — never a waste-side fetcher:
 
 ### Provider 2: tag-drift
 
-`inventory ∖ tagged-set = unmanaged`. Left side: the per-service scanners (describe calls see *everything*, including never-tagged resources). Right side: `resource_groups_utils.py` (already built). **No Cost Explorer involved** — it was never needed for the diff, only for ranking (v3).
+`inventory ∖ tagged-set = unmanaged`. Left side: the per-service scanners (describe calls see *everything*, including never-tagged resources). Right side: `resource_groups_utils.py` (already built). **No Cost Explorer involved** — it was never needed for the diff, only for ranking (v4).
 
 - Runs **only** when `--managed-tag KEY[=VALUE]` is given. No default tag — the tool never assumes an org's convention.
 - Findings default to `confidence: review` (drift ≠ proof of waste).
@@ -233,7 +235,7 @@ Entries 9–18: reshaping grilling session, 2026-08-26.
 
 1. **Identity:** new verb `waste` in this repo — not a separate package, not a pivot.
 2. **v1 scope:** state rules + tag-drift providers; add RDS + EFS scanners; skip Elastic Beanstalk.
-3. **Cost numbers in v1:** static bundled price table, labeled estimates. No Cost Explorer for discovery — inventory itself is the left side of the diff.
+3. **Cost numbers in v1:** static bundled price table, labeled estimates. No Cost Explorer for discovery — inventory itself is the left side of the diff. *Superseded by decision 10: no cost numbers in v1.*
 4. **Remediation:** report-only, forever read-only IAM. Findings carry a `suggested_action` string but the tool never mutates.
 5. **Verb name:** `waste`.
 6. **Tag semantics:** no default managed tag; `--managed-tag` is required to enable tag-drift; `--trust-tags` upgrades drift findings and requires `--managed-tag`.
