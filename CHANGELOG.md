@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/ishuar/aws-resource-inventory/compare/v0.2.0...v0.2.1) (2026-09-17)
+
+
+### 📦 Other Changes
+
+* waste v1 spec reshaped — cleanup-first, cost estimation deferred, 10 state rules ([#72](https://github.com/ishuar/aws-resource-inventory/issues/72)) ([74b9ec1](https://github.com/ishuar/aws-resource-inventory/commit/74b9ec1e4c36dab5a23f0a767c625043a41ab304))
+
 ## [0.2.0](https://github.com/ishuar/aws-resource-inventory/compare/v0.1.1...v0.2.0) (2026-08-26)
 
 
