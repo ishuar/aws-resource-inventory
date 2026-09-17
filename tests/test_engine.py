@@ -5,7 +5,8 @@ The engine is the one home for pagination, parallel collection, and
 tag matching. Its invariants (tested here, stated in its docstrings)
 are what every scanner relies on:
 
-- collect_pages always paginates; items keep page order; boto errors raise.
+- collect_pages paginates unless the spec declares paginated=False; items
+  keep page order; boto errors raise.
 - run_parallel returns EXACTLY the task keys, in insertion order; every
   exception propagates (fail fast) — the caller records it as ScanError
   data (ADR-0010), so a denied describe never reads as "zero resources".

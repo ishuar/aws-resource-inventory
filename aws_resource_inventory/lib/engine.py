@@ -11,8 +11,10 @@ reaches for these helpers where they help.
 
 Invariants (relied on by tests/test_engine.py and every caller):
 
-- ``collect_pages`` always paginates via ``get_paginator``; items keep
-  page order; boto errors raise — guarding is the caller's decision.
+- ``collect_pages`` paginates via ``get_paginator`` unless the spec
+  declares ``paginated=False`` (then the single response is the only
+  page); items keep page order; boto errors raise — guarding is the
+  caller's decision.
 - ``run_parallel`` returns EXACTLY the task keys, in insertion order,
   every value a list. Every exception propagates: scan_region records
   it as ScanError data (ADR-0010), so a denied describe never reads as
@@ -25,8 +27,8 @@ Invariants (relied on by tests/test_engine.py and every caller):
   exists (any key); no filter = always True.
 
 Guard rail (agreed design rule): ``Describe`` never grows beyond
-``op / result_key / kwargs / flatten``. Anything needing more is a
-plain function calling ``collect_pages``.
+``op / result_key / kwargs / flatten / paginated``. Anything needing
+more is a plain function calling ``collect_pages``.
 """
 
 from collections.abc import Callable, Iterable, Mapping
@@ -48,7 +50,7 @@ _R = TypeVar("_R")
 
 @dataclass(frozen=True)
 class Describe:
-    """One paginated call filling one result key — the common case.
+    """One describe call filling one result key — the common case.
 
     ``paginated=False`` is for the few operations botocore has no
     paginator for (ec2 describe_addresses): the API returns everything

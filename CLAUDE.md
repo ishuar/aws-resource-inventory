@@ -46,7 +46,9 @@ reintroduce them.
 7. **Don't hand-roll what the platform provides.** botocore's adaptive
    retry mode owns transient-error retries (the old retry_with_backoff
    wrapper is deleted — do not reintroduce one). Same instinct applies to
-   pagination (use paginators, always) and diffing.
+   pagination (use paginators wherever botocore has one; a `Describe`
+   declares `paginated=False` for the few operations that lack one,
+   never sniffed at runtime) and diffing.
 8. **Unused features get deleted, not fixed.** `--compare`/deepdiff were
    removed after proving zero successful executions (the locked deepdiff
    couldn't even be imported). Apply the deletion test with evidence
@@ -262,7 +264,9 @@ reintroduce them.
   attribute-sourced names it cannot see (`ec2:security-group`,
   `ec2:image`, `elb:loadbalancer-*`, `elb:targetgroup`,
   `autoscaling:launch-template`) by batching one describe per type per
-  region over the ARNs the Tagging API returned; unify
+  region over the ARNs the Tagging API returned; cross-check the
+  constructed `ec2:elastic-ip` ARN against the Tagging API once a tagged
+  Elastic IP exists (the reference misled on image/snapshot before); unify
   the six copies of the scan-path predicate (`all_services or tag_key
   or tag_value`) behind one helper; a progress-event seam so rich
   rendering lives only in aws_resource_inventory/cli.py (plus shrinking

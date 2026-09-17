@@ -6,8 +6,9 @@ Scans EC2 resources: instances, volumes, security groups, AMIs,
 snapshots, and Elastic IPs. Tag-based filtering is handled by the
 Resource Groups API at the main scanner level.
 
-Fully declarative: every resource type is one paginated describe call,
-so the whole scan is a Describe spec executed by the shared engine.
+Fully declarative: every resource type is one describe call (paginated
+where botocore offers a paginator; describe_addresses has none), so the
+whole scan is a Describe spec executed by the shared engine.
 Documentation: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html
 """
 
