@@ -57,8 +57,9 @@ states its own completeness.**
 - A service scan that fails part-way now errors that service in that
   region rather than emitting partial results: granularity is
   service × region, not per describe call.
-- The `waste` verb must downgrade or refuse on a partial inventory
-  (roadmap note in PRODUCT.md; not built yet).
+- The `waste` verb reports and marks a partial inventory rather than
+  refusing it, and skips a rule in any region whose service scan
+  errored (PRODUCT.md decision 16).
 - ADR-0005's "visible via `by_region`" claim is corrected to point
   here.
 

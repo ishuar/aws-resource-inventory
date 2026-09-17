@@ -12,11 +12,13 @@ reintroduce them.
   services (ec2, s3, ecs, efs, elb, vpc, rds, autoscaling) with tag
   filtering (Resource Groups Tagging API path). Releases are automated
   (release-please + trusted PyPI publishing gated by a manual approval).
-- Next: **`aws-inventory waste`** — find resources still generating
-  costs but no longer used. `PRODUCT.md` is the spec of record: the
-  `Finding` type, the `SignalProvider` seam, v1 rules, roadmap, and the
-  decision log. Product guarantees (non-negotiable): read-only forever,
-  zero setup, evidence with honest confidence levels.
+- Next: **`aws-inventory waste`** — find abandoned resources: cleanup
+  first, cost saving as the frequent side effect (PRODUCT.md decision
+  9; cost estimation is deferred to roadmap v4). `PRODUCT.md` is the
+  spec of record: the `Finding` type, the `SignalProvider` seam, the 10
+  v1 state rules, roadmap, and the decision log. Product guarantees
+  (non-negotiable): read-only forever, zero setup, evidence with honest
+  confidence levels.
 
 ## Non-negotiable engineering rules
 
@@ -272,10 +274,12 @@ reintroduce them.
 ## Future vision
 
 - The product turn: **`aws-inventory waste`** per `PRODUCT.md` — the
-  `Finding` type and `SignalProvider` registry sit on top of the typed
-  `Resource` and the scanners; the RDS and EFS scanners it needs are
-  already shipped. Roadmap `PRODUCT.md` §5 (state rules + tag drift →
-  Cost Optimization Hub → cost ranking → CloudWatch signals), backlog
+  `Finding` type and `SignalProvider` registry (both in
+  `aws_resource_inventory/waste/`, a sibling feature package — `lib/`
+  stays feature-free) sit on top of the typed `Resource` and the
+  scanners; providers are pure and never call AWS — scanners are the
+  single fetch layer. Roadmap `PRODUCT.md` §5 (state rules + tag drift
+  → CloudWatch signals → Cost Optimization Hub → cost ranking), backlog
   §6, decisions §7.
 - Optional post-roadmap chore: migrate poetry → uv (decided: not
   before; CI stays on poetry until then).
